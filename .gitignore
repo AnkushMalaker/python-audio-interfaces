@@ -1,0 +1,8 @@
+__pycache__
+voice_clips
+lightning_logs
+test_data
+weights
+Data
+Models
+easy_audio_interfaces/models

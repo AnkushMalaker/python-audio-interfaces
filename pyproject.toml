@@ -1,0 +1,54 @@
+[tool.poetry]
+name = "easy-audio-interfaces"
+version = "0.1.0"
+description = ""
+authors = ["Ankush Malaker <43288948+AnkushMalaker@users.noreply.github.com>"]
+readme = "README.md"
+packages = [{ include = "easy_audio_interfaces" }]
+
+[tool.poetry.dependencies]
+python = ">=3.9,<3.13"
+pyaudio = "^0.2.13"
+samplerate = "^0.1.0"
+types-pyaudio = "^0.2.16.5"
+fire = "^0.5.0"
+scipy = "^1.11.2"
+rich = "^13.5.3"
+
+[tool.poetry.group.dev.dependencies]
+black = "^23.1.0"
+isort = "^5.12.0"
+pytest = "^7.2.1"
+ipython = "^8.10.0"
+ipdb = "^0.13.11"
+mypy = "^1.0.0"
+pynvim = "^0.4.3"
+pre-commit = "^3.1.1"
+
+
+[tool.poetry.group.stt.dependencies]
+faster-whisper = "^0.9.0"
+
+
+[tool.isort]
+profile = "black"
+
+[tool.black]
+exclude = """
+(
+  .venv
+  | .git
+  | lightning_logs
+  | multirun
+)
+"""
+line-length = 100
+target_version = ["py39", "py310"]
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[[tool.mypy.overrides]]
+ignore_missing_imports = true
+module = ["onnxruntime.*", "samplerate.*"]
