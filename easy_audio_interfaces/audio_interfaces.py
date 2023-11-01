@@ -184,6 +184,9 @@ class InputFileStream(AudioSource):
             return NumpyFrame.frombuffer(self._wf.readframes(self._chunk_size))
         elif self._wf.tell() + self._chunk_size >= self._wf.getnframes():
             logger.info("Called read() after EOF. Returning None.")
+            return None
+        else:
+            return None
 
     def __iter__(self) -> Generator[NumpyFrame, None, None]:
         while self._wf.tell() + self._chunk_size < self._wf.getnframes():

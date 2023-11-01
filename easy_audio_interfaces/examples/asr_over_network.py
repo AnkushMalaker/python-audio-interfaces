@@ -62,7 +62,9 @@ def main(role: str, models_root: str = os.environ.get("MODELS_DIR", "./Models"))
     if role == "server":
         model = WhisperBlock(model_description="medium.en", models_root=models_root)
         with (
-            SocketReceiver(sample_rate=transmission_sr, channels=1) as reciever,
+            SocketReceiver(
+                host="0.0.0.0", port=5025, sample_rate=transmission_sr, channels=1
+            ) as reciever,
             CollectorBlock(sample_rate=transmission_sr, collect_seconds=5) as collector,
         ):
             collector.write_from(reciever)
@@ -86,7 +88,7 @@ def main(role: str, models_root: str = os.environ.get("MODELS_DIR", "./Models"))
             ResamplingBlock(
                 original_sample_rate=audio_stream.sample_rate, resample_rate=transmission_sr
             ) as resampler,
-            SocketStreamer(sample_rate=transmission_sr, channels=1) as streamer,
+            SocketStreamer(port=5025, sample_rate=transmission_sr, channels=1) as streamer,
         ):
             resampler.write_from(audio_stream)
             for segment in resampler:
