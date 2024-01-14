@@ -28,3 +28,9 @@ class NumpyFrame(NDArray[Sample]):
 
     def save_waveform_to_file(self, file_path: PathLike):
         raise NotImplementedError
+
+
+# A segment is the same in terms of data as a frame but is semantically different, as its
+# meant to denote a chunk of audio
+class NumpySegment(NumpyFrame):
+    ...

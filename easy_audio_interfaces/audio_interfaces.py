@@ -5,13 +5,24 @@ import wave
 from queue import Queue
 from socket import AF_INET, SOCK_STREAM, socket
 from types import TracebackType
-from typing import Dict, Generator, Iterable, Optional, Protocol, Type, Union, cast
+from typing import (
+    Dict,
+    Generator,
+    Iterable,
+    Iterator,
+    Optional,
+    Protocol,
+    Sequence,
+    Type,
+    Union,
+    cast,
+)
 
 import numpy as np
 import pyaudio
 from samplerate import Resampler
 
-from easy_audio_interfaces.types.audio import NumpyFrame
+from easy_audio_interfaces.types.audio import NumpyFrame, Sample
 from easy_audio_interfaces.types.common import PathLike
 
 logger = logging.getLogger(__name__)
@@ -359,7 +370,7 @@ class OutputSpeakerStream(AudioSink):
 
 
 class OutputFileStream(AudioSink):
-    def __init__(self, file_path: PathLike, sample_rate: int = 48000, channels: int = 1):
+    def __init__(self, file_path: PathLike, sample_rate: int, channels: int = 1):
         self.file_path = str(file_path)
         self._sample_rate = sample_rate
         self.channels = channels
@@ -489,6 +500,9 @@ class AudioProcessingBlock(Iterable, Protocol):
     def sample_rate(self) -> int:
         ...
 
+    def __iter__(self) -> Generator[NumpyFrame, None, None]:
+        ...
+
 
 class CollectorBlock(AudioProcessingBlock):
     def __init__(
@@ -536,6 +550,25 @@ class CollectorBlock(AudioProcessingBlock):
     def __iter__(self) -> Generator[NumpyFrame, None, None]:
         while True:
             yield self.read()
+
+
+class RechunkingBlock(Iterable[NumpyFrame]):
+    def __init__(self, input_stream: Iterable[NumpyFrame], chunk_size: int) -> None:
+        self.chunk_size = chunk_size
+        self.input_stream = input_stream
+
+    def rechunk(self, stream: Iterable[NumpyFrame]) -> Generator[NumpyFrame, None, None]:
+        chunks = []
+        for chunk in stream:
+            chunks += chunk.tolist()
+            while len(chunks) >= self.chunk_size:
+                yield NumpyFrame(np.array(chunks[: self.chunk_size]))
+                chunks = chunks[self.chunk_size :]
+        if len(chunks) > 0:
+            yield NumpyFrame(np.array(chunks))
+
+    def __iter__(self) -> Generator[NumpyFrame, None, None]:
+        yield from self.rechunk(self.input_stream)
 
 
 class ResamplingBlock(AudioProcessingBlock):
@@ -606,9 +639,12 @@ class ResamplingBlock(AudioProcessingBlock):
         self.reader_thread = threading.Thread(target=_write, daemon=True)
         self.reader_thread.start()
 
-    def __iter__(self) -> Generator[NumpyFrame, None, None]:
+    def iter(self) -> Generator[NumpyFrame, None, None]:
         while True:
             yield self.buffer.get()
+
+    def __iter__(self) -> Generator[NumpyFrame, None, None]:
+        yield from self.iter()
 
     def read(self) -> NumpyFrame:
         return self.buffer.get()

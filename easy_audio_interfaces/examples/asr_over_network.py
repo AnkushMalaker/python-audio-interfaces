@@ -1,10 +1,7 @@
 import logging
 import os
-from pathlib import Path
-from typing import Any, Optional
 
 import fire
-from numpy.typing import NDArray
 
 from easy_audio_interfaces.audio_interfaces import (
     CollectorBlock,
@@ -14,7 +11,7 @@ from easy_audio_interfaces.audio_interfaces import (
     SocketReceiver,
     SocketStreamer,
 )
-from easy_audio_interfaces.types import PathLike
+from easy_audio_interfaces.extras.models import WhisperBlock
 
 logging.basicConfig(level=logging.ERROR)
 
@@ -24,37 +21,6 @@ def save_to_file(waveform, file_name, sr):
     output_file_stream.open()
     output_file_stream.write(waveform)
     output_file_stream.close()
-
-
-class WhisperBlock:
-    def __init__(
-        self,
-        model_description: str = "guillaumekln/faster-whisper-large-v2",
-        language: Optional[str] = None,
-        models_root: PathLike = Path("/home/models"),
-    ) -> None:
-        try:
-            from faster_whisper import WhisperModel
-        except ImportError:
-            raise ImportError("Please install stt feature to use the WhisperBlock")
-        self.language = language or "en"
-        self.model = WhisperModel(
-            model_description,
-            download_root=str(models_root),
-        )
-        self.feature_extractor = self.model.feature_extractor
-
-    def open(self):
-        pass
-
-    def close(self):
-        pass
-
-    def transcribe(self, audio: NDArray, **kwargs):
-        return self.model.transcribe(audio, language=self.language, **kwargs)
-
-    def __call__(self, *args: Any, **kwargs: Any) -> Any:
-        return self.transcribe(*args, **kwargs)
 
 
 def main(role: str, models_root: str = os.environ.get("MODELS_DIR", "./Models")):

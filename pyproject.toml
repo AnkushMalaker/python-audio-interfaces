@@ -31,6 +31,12 @@ optional = true
 [tool.poetry.group.stt.dependencies]
 faster-whisper = "^0.9.0"
 
+[tool.poetry.group.silero-vad]
+optional = true
+
+[tool.poetry.group.silero-vad.dependencies]
+torch = "^2.1.2"
+torchaudio = "^2.1.2"
 
 [tool.isort]
 profile = "black"

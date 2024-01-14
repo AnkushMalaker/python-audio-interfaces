@@ -1,0 +1,27 @@
+{
+  "workspaceFolder": "/opt/code",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "ms-python.isort",
+        "ms-python.black-formatter",
+        // Below are optional extensions
+        "GitHub.copilot",
+        "christian-kohler.path-intellisense",
+        "aaron-bond.better-comments",
+        "Turiiya.german-scroll",
+        "tamasfe.even-better-toml"
+      ]
+    }
+  },
+  "dockerComposeFile": [
+    "../docker-compose.yaml"
+  ],
+  "service": "development",
+  "runServices": [
+    "development"
+  ],
+  "postStartCommand": "git config --global --add safe.directory ${containerWorkspaceFolder}"
+}
