@@ -15,9 +15,9 @@ from easy_audio_interfaces.types.common import PathLike
 class VoiceGate:
     def __init__(
         self,
-        starting_patience: int = 20,
+        starting_patience: int = 5,
         stopping_patience: int = 20,
-        cool_down: int = 10,
+        cool_down: int = 20,
         threshold: float = 0.5,
     ) -> None:
         self.starting_patience = starting_patience
@@ -32,7 +32,7 @@ class VoiceGate:
         self._cooldown = cool_down
 
     def next(self, probability: float) -> bool:
-        print(self._starting_patience, self._stopping_patience, self._cooldown, probability)
+        # print(self._starting_patience, self._stopping_patience, self._cooldown, probability)
         if not self._gate:
             if self._cooldown > 0:
                 # Decrement cooldown counter if it's active
@@ -58,26 +58,39 @@ class VoiceGate:
         return self._gate
 
     def iter_segments(
-        self, frames: Iterable[torch.Tensor], model: Callable[[torch.Tensor], float]
+        self, frames: Iterable[NumpyFrame], model: Callable[[torch.Tensor], float]
     ) -> Generator[NumpySegment, None, None]:
         segment = []
         buffer = []
+        low_prob_count = 0  # Counter for consecutive low probability frames at segment end
+
         for frame in frames:
-            probability = model(frame)
+            input_tensor = torch.tensor(frame.normalize(), dtype=torch.float32)
+            probability = model(input_tensor)
             if self.next(probability):
                 if not self._gate and buffer:
                     # If the gate just opened, prepend buffered frames to the segment
                     segment.extend(buffer)
                     buffer = []
-                segment.append(frame.numpy())
+                segment.append(frame)
+                low_prob_count = 0  # Reset counter since this is a high probability frame
             else:
                 if segment:
-                    # Gate closed and there is a segment to yield
-                    yield NumpySegment(segment)
-                    segment = []
+                    low_prob_count += 1  # Increment counter for a low probability frame
+                    if low_prob_count <= self.stopping_patience:
+                        # Add frame to segment if within stopping patience
+                        segment.append(frame)
+                    if self._stopping_patience <= 0:
+                        # Gate closed and there is a segment to yield
+                        if low_prob_count > self.stopping_patience:
+                            # Discard the low probability frames at the end
+                            segment = segment[:-low_prob_count]
+                        yield NumpySegment(segment)
+                        segment = []
+                        low_prob_count = 0
                 if self._starting_patience < self.starting_patience:
                     # Buffer frames when voice probability is rising but gate isn't open yet
-                    buffer.append(frame.numpy())
+                    buffer.append(frame)
                 else:
                     # Clear the buffer when the voice probability is consistently low
                     buffer = []
@@ -119,11 +132,6 @@ class SileroVad:
             raise ValueError(f"Frame size must be {self.WINDOW_SIZE_SAMPLES} but got {len(frame)}")
         return self.model(frame, self.sampling_rate)
 
-    @staticmethod
-    def to_tensor(frame_iterator: Iterable[NumpyFrame]) -> Generator["torch.Tensor", None, None]:
-        for frame in frame_iterator:
-            yield torch.tensor(frame, dtype=torch.float32)
-
     def voice_segment_iterator(
         self, frames: Iterable[NumpyFrame], voice_gate: VoiceGate = VoiceGate(), **kwargs
     ) -> Generator[NumpySegment, None, None]:
@@ -145,7 +153,7 @@ class SileroVad:
                 voice_gate = VoiceGate(**kwargs)
         yield from voice_gate.iter_segments(
             # self.to_tensor(frames), partial(self.model, sr=self.sampling_rate)
-            self.to_tensor(frames),
+            frames,
             partial(self.model, sr=self.sampling_rate),
         )
 
