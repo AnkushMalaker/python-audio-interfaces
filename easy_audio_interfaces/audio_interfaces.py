@@ -1,203 +1,57 @@
-import json
+import asyncio
 import logging
-import threading
-import wave
-from queue import Queue
-from socket import AF_INET, SOCK_STREAM, socket
-from types import TracebackType
-from typing import Dict, Generator, Iterable, Optional, Protocol, Type, Union, cast
+from asyncio import StreamReader, StreamWriter, open_connection, start_server
+from typing import AsyncGenerator, AsyncIterable, Callable, Optional, Protocol, Type
 
 import numpy as np
-import pyaudio
+import websockets
 from samplerate import Resampler
 
 from easy_audio_interfaces.types.audio import NumpyFrame
-from easy_audio_interfaces.types.common import PathLike
 
 logger = logging.getLogger(__name__)
 
+AUDIO_FORMAT = "int16"
 
-AUDIO_FORMAT = pyaudio.paInt16
 
+class AudioSource(AsyncIterable, Protocol):
+    """Abstract source class that can be used to read from a file or stream."""
 
-class AudioSource(Iterable, Protocol):
-    """Abstract source class that can be used to read from a file or stream from microphone"""
-
-    def read(self) -> NumpyFrame:
+    async def read(self) -> NumpyFrame:
         ...
 
-    def open(self):
+    async def open(self):
         ...
 
-    def close(self):
+    async def close(self):
         ...
 
-    def __enter__(self) -> "AudioSource":
-        self.open()
+    async def __aenter__(self) -> "AudioSource":
+        await self.open()
         return self
 
-    def __exit__(
+    async def __aexit__(
         self,
         exc_type: Optional[Type[BaseException]],
         exc_value: Optional[BaseException],
-        traceback: Optional[TracebackType],
+        traceback: Optional[Type[BaseException]],
     ):
-        self.close()
+        await self.close()
 
     @property
     def sample_rate(self) -> int:
         ...
-
-    def __iter__(self) -> Generator[NumpyFrame, None, None]:
-        ...
-
-
-# FIXME: Add "clear_buffer" method
-class InputMicStream(AudioSource):
-    def __init__(
-        self,
-        device_index: Optional[int] = None,
-        channels: int = 1,
-        buffer_maxlen: Optional[int] = 1024 * 1024,
-        num_frames_to_record: Optional[int] = None,
-    ):
-        self._p = pyaudio.PyAudio()
-        self._device_index = device_index
-        if self._device_index and self._device_index < 0:
-            for i in range(self._p.get_device_count()):
-                max_inp_channels = cast(
-                    float, self._p.get_device_info_by_index(i)["maxInputChannels"]
-                )
-                if max_inp_channels > 0:
-                    print(json.dumps(self._p.get_device_info_by_index(i), indent=4))
-            self._device_index = int(input("Enter input device index: "))
-        self.buffer: Queue[NumpyFrame] = Queue(maxsize=buffer_maxlen or 0)
-        self._channels = channels
-        self.num_frames_to_record = num_frames_to_record
-
-    @property
-    def device_info(self) -> Dict:
-        if self._device_index is None:
-            return cast(dict, self._p.get_default_input_device_info())
-        else:
-            return cast(dict, self._p.get_device_info_by_index(self._device_index))
-
-    @property
-    def sample_rate(self) -> int:
-        return int(self.device_info["defaultSampleRate"])
-
-    def open(self):
-        logger.info(
-            "Starting input stream using %s",
-            self.device_info,
-        )
-        self._stream = self._p.open(
-            format=AUDIO_FORMAT,
-            channels=self._channels,
-            rate=self.sample_rate,
-            input=True,
-            input_device_index=self._device_index,
-            stream_callback=self._to_buffer_callback,
-        )
-        self.start()
-        return self
-
-    def __exit__(
-        self,
-        exc_type: Optional[Type[BaseException]],
-        exc_value: Optional[BaseException],
-        traceback: Optional[TracebackType],
-    ):
-        logger.info("Stopping input mic stream, cleaning up.")
-        if not self.is_stopped():
-            self.stop()
-        self.close()
-        self._p.terminate()
-
-    def __iter__(self) -> Generator[NumpyFrame, None, None]:
-        while self.is_active():
-            yield self.buffer.get()
-
-    def start(self) -> "InputMicStream":
-        self._stream.start_stream()
-        return self
-
-    def stop(self):
-        try:
-            self._stream.stop_stream()
-        except OSError as e:
-            logger.error(f"Error stopping stream: {e}")
-
-    def is_stopped(self) -> bool:
-        try:
-            return self._stream.is_stopped()
-        except OSError as e:
-            logger.error(f"Error checking stream status: {e}")
-            return False
-
-    def is_active(self) -> bool:
-        try:
-            return self._stream.is_active()
-        except OSError as e:
-            logger.error(f"Error checking if stream is active: {e}")
-            return False
-
-    def _to_buffer_callback(self, in_data: Optional[bytes], frame_count, time_info, status):
-        if self.num_frames_to_record is not None:
-            self.num_frames_to_record -= 1
-            if self.num_frames_to_record <= 0:
-                self.stop()
-        if in_data is not None:
-            data = NumpyFrame.frombuffer(in_data)
-            self.buffer.put(data)
-        return None, pyaudio.paContinue
-
-    def read(self) -> NumpyFrame:
-        return self.buffer.get()
-
-    def close(self):
-        self._stream.close()
-
-
-class InputFileStream(AudioSource):
-    def __init__(self, file_path: PathLike, chunk_size: int = 1024):
-        self.file_path = file_path
-        self._chunk_size = chunk_size
-
-    @property
-    def sample_rate(self) -> int:
-        return self._wf.getframerate()
 
     @property
     def channels(self) -> int:
-        return self._wf.getnchannels()
+        ...
 
-    def open(self):
-        self._wf = wave.open(str(self.file_path), "rb")
-        logger.info(
-            f"Started file stream: {self.file_path}, sample rate: {self.sample_rate}, channels: {self.channels}",
-        )
+    def __aiter__(self) -> AsyncGenerator[NumpyFrame, None]:
+        return self.iter_frames()
 
-    def close(self):
-        self._wf.close()
-        logger.info("Closed file stream.")
-
-    def read(self) -> Optional[NumpyFrame]:
-        if self._wf.tell() < self._wf.getnframes():
-            return NumpyFrame.frombuffer(self._wf.readframes(self._chunk_size))
-        elif self._wf.tell() + self._chunk_size >= self._wf.getnframes():
-            logger.info("Called read() after EOF. Returning None.")
-            return None
-        else:
-            return None
-
-    def __iter__(self) -> Generator[NumpyFrame, None, None]:
-        while self._wf.tell() + self._chunk_size < self._wf.getnframes():
-            yield NumpyFrame.frombuffer(self._wf.readframes(self._chunk_size))
-        else:
-            logger.info(
-                f"Finished reading frames. Pointer at {self._wf.tell()}. Discarding {self._wf.getnframes() - self._wf.tell()} frames."
-            )
+    async def iter_frames(self) -> AsyncGenerator[NumpyFrame, None]:
+        async for frame in self:
+            yield frame
 
 
 class SocketReceiver(AudioSource):
@@ -205,16 +59,17 @@ class SocketReceiver(AudioSource):
         self,
         sample_rate: int = 16000,
         channels: int = 1,
-        buffer_maxlen: Optional[int] = None,
         port: int = 5000,
         host: str = "localhost",
+        post_process_callback: Optional[Callable[[bytes], NumpyFrame]] = None,
     ):
-        self.buffer: Queue[NumpyFrame] = Queue(maxsize=buffer_maxlen or 0)
         self._sample_rate = sample_rate
         self._channels = channels
         self._port = port
         self._host = host
-        self.reader_thread = None
+        self.websocket = None
+        self._server = None
+        self.post_process_callback = post_process_callback
 
     @property
     def sample_rate(self) -> int:
@@ -224,207 +79,68 @@ class SocketReceiver(AudioSource):
     def channels(self) -> int:
         return self._channels
 
-    def open(self):
-        self._socket = socket(AF_INET, SOCK_STREAM)
-        self._socket.bind((self._host, self._port))
-        self._socket.listen(1)
-        logger.info(
-            f"Started socket receiver: {self._host}:{self._port}, sample rate: {self.sample_rate}, channels: {self.channels}",
-        )
-        self.start_receiving()
+    async def handle_client(self, websocket, path):
+        self.websocket = websocket
+        logger.info(f"Accepted connection from {websocket.remote_address}")
 
-    def close(self):
-        self._socket.close()
-        logger.info("Closed socket receiver.")
+    async def open(self):
+        self._server = await websockets.serve(self.handle_client, self._host, self._port)
+        logger.info(f"WebSocket server listening on ws://{self._host}:{self._port}")
+        # Wait until a client connects
+        while self.websocket is None:
+            await asyncio.sleep(0.1)
 
-    def _read(self):
-        while True:
-            try:
-                data = self._connection.recv(1024)
-                if data:
-                    self.buffer.put(NumpyFrame.frombuffer(data))
+    async def close(self):
+        if self.websocket:
+            await self.websocket.close()
+        if self._server:
+            self._server.close()
+            await self._server.wait_closed()
+        logger.info("Closed WebSocket receiver.")
+
+    async def read(self) -> NumpyFrame:
+        assert self.websocket is not None, "WebSocket is not connected."
+        try:
+            data = await self.websocket.recv()
+            if data:
+                if self.post_process_callback:
+                    post_process_data = self.post_process_callback(data)
+                    return post_process_data
                 else:
-                    logger.info("No more data from client.")
-                    break
-            except Exception as e:
-                logger.error(f"Error reading from socket: {e}")
-                break
+                    return NumpyFrame.frombuffer(data)
+            else:
+                logger.info("No data received.")
+                return NumpyFrame(np.array([], dtype=np.int16))
+        except websockets.exceptions.ConnectionClosed:
+            logger.info("WebSocket connection closed.")
+            return NumpyFrame(np.array([], dtype=np.int16))
 
-    def start_receiving(self):
-        self._connection, self._address = self._socket.accept()
-        logger.info(f"Accepted connection from {self._address}")
-        self.reader_thread = threading.Thread(target=self._read, daemon=True)
-        self.reader_thread.start()
-
-    def read(self) -> NumpyFrame:
-        return self.buffer.get()
-
-    def __iter__(self) -> Generator[NumpyFrame, None, None]:
+    async def iter_frames(self) -> AsyncGenerator[NumpyFrame, None]:
+        logger.debug("Starting frame iteration.")
         while True:
-            yield self.read()
+            logger.debug("Reading frame.")
+            frame = await self.read()
+            logger.debug(f"Received frame with {len(frame)} samples")
+            if frame.size > 0:
+                yield frame
+            else:
+                break
+        logger.debug("Ending frame iteration.")
 
 
-class AudioSink(Protocol):
-    """Abstract sink class that can be used to write to a file or stream to speaker"""
-
-    reader_thread: Optional[threading.Thread]
-
-    def write(self, frame: NumpyFrame):
-        ...
-
-    def open(self):
-        ...
-
-    def close(self):
-        ...
-
-    def __enter__(self) -> "AudioSink":
-        self.open()
-        return self
-
-    def __exit__(
-        self,
-        exc_type: Optional[Type[BaseException]],
-        exc_value: Optional[BaseException],
-        traceback: Optional[TracebackType],
-    ) -> None:
-        self.close()
-
-    def write_from(self, input_stream: "AudioSource"):
-        ...
-
-    @property
-    def sample_rate(self) -> int:
-        ...
-
-
-class OutputSpeakerStream(AudioSink):
-    def __init__(
-        self,
-        device_index: Optional[int] = None,
-        channels: int = 1,
-        buffer_maxlen: Optional[int] = None,
-    ):
-        self._p = pyaudio.PyAudio()
-        self._device_index = device_index
-        if self._device_index and self._device_index < 0:
-            for i in range(self._p.get_device_count()):
-                max_out_channels = cast(
-                    float, self._p.get_device_info_by_index(i)["maxOutputChannels"]
-                )
-                if max_out_channels > 0:
-                    print(json.dumps(self._p.get_device_info_by_index(i), indent=4))
-            self._device_index = int(input("Enter output device index: "))
-        self.buffer: Queue[NumpyFrame] = Queue(maxsize=buffer_maxlen or 0)
-        self._channels = channels
-        self.reader_thread = None
-
-    @property
-    def device_info(self) -> Dict:
-        if self._device_index is None:
-            return cast(dict, self._p.get_default_output_device_info())
-        else:
-            return cast(dict, self._p.get_device_info_by_index(self._device_index))
-
-    @property
-    def sample_rate(self) -> int:
-        return int(self.device_info["defaultSampleRate"])
-
-    def open(self):
-        logger.info(
-            "Starting output stream using %s",
-            self.device_info,
-        )
-        self._stream = self._p.open(
-            rate=self.sample_rate,
-            format=AUDIO_FORMAT,
-            output=True,
-            channels=self._channels,
-            output_device_index=self._device_index,
-        )
-
-    def close(self):
-        self._stream.stop_stream()
-        self._stream.close()
-        self._p.terminate()
-        logger.info("Stopped speaker stream.")
-
-    def write(self, data: NumpyFrame):
-        self._stream.write(data.tobytes())
-
-    def write_from(self, input_stream: Union[AudioSource, "AudioProcessingBlock"]):
-        def _write():
-            for chunk in input_stream:
-                self.write(chunk)
-
-        self.reader_thread = threading.Thread(target=_write, daemon=True)
-        self.reader_thread.start()
-
-
-class OutputFileStream(AudioSink):
-    def __init__(self, file_path: PathLike, sample_rate: int, channels: int = 1):
-        self._file_path = str(file_path)
-        self._sample_rate = sample_rate
-        self.channels = channels
-        self.reader_thread = None
-        self._is_open = False
-
-    @property
-    def file_path(self) -> str:
-        return self._file_path
-
-    @property
-    def sample_rate(self) -> int:
-        return self._sample_rate
-
-    def open(self):
-        self._file = wave.open(self._file_path, "wb")
-        self._file.setnchannels(self.channels)
-        self._file.setsampwidth(2)  # 16 bit
-        self._file.setframerate(self.sample_rate)
-        self._is_open = True
-
-        self.numel = 0
-
-    def close(self):
-        logger.info("Stopping output file stream, cleanup.")
-        self._is_open = False
-        self._file.close()
-
-    def is_open(self) -> bool:
-        return self._is_open
-
-    def write(self, data: NumpyFrame):
-        if self.is_open():
-            self.numel += data.shape[0]
-            self._file.writeframes(data.tobytes())
-        else:
-            raise RuntimeError("File is not open.")
-
-    def write_from(self, input_stream: Union[AudioSource, "AudioProcessingBlock"]):
-        def _write():
-            for chunk in input_stream:
-                self.write(chunk)
-
-        self.reader_thread = threading.Thread(target=_write, daemon=True)
-        self.reader_thread.start()
-
-
-class SocketStreamer(AudioSink):
+class SocketStreamer:
     def __init__(
         self,
         sample_rate: int = 16000,
         channels: int = 1,
-        buffer_maxlen: Optional[int] = None,
         port: int = 5000,
         host: str = "localhost",
     ):
-        self.buffer: Queue[NumpyFrame] = Queue(maxsize=buffer_maxlen or 0)
         self._sample_rate = sample_rate
         self._channels = channels
         self._port = port
         self._host = host
-        self.reader_thread = None
+        self.writer: Optional[StreamWriter] = None
 
     @property
     def sample_rate(self) -> int:
@@ -434,226 +150,88 @@ class SocketStreamer(AudioSink):
     def channels(self) -> int:
         return self._channels
 
-    def open(self):
-        self._socket = socket(AF_INET, SOCK_STREAM)
-        self._socket.connect((self._host, self._port))
-        logger.info(
-            f"Started socket streamer: {self._host}:{self._port}, sample rate: {self.sample_rate}, channels: {self.channels}",
-        )
+    async def open(self):
+        reader, self.writer = await open_connection(self._host, self._port)
+        logger.info(f"Connected to {self._host}:{self._port}")
 
-    def close(self):
-        self._socket.close()
-        logger.info("Closed socket streamer.")
+    async def close(self):
+        if self.writer:
+            self.writer.close()
+            await self.writer.wait_closed()
+            logger.info("Closed socket streamer.")
 
-    def write(self, data: NumpyFrame):
-        self._socket.send(data.tobytes())
+    async def write(self, data: NumpyFrame):
+        assert self.writer is not None, "Socket is not connected."
+        self.writer.write(data.tobytes())
+        await self.writer.drain()
 
-    def write_from(self, input_stream: Union[AudioSource, "AudioProcessingBlock"]):
-        def _write():
-            for chunk in input_stream:
-                self.write(chunk)
-
-        self.reader_thread = threading.Thread(target=_write, daemon=True)
-        self.reader_thread.start()
+    async def write_from(self, input_stream: AsyncIterable[NumpyFrame]):
+        async for chunk in input_stream:
+            await self.write(chunk)
 
 
-class AudioProcessingBlock(Iterable, Protocol):
-    """Abstract class that can be used to process audio data."""
-
-    reader_thread: Optional[threading.Thread]
-
-    # If the input stream is not active after init, we can assume that the previous stream has ended,
-    # and use this information to yield the last chunk of data.
-    input_stream_terminated: bool = False
-
-    def open(self):
-        ...
-
-    def close(self):
-        ...
-
-    def __enter__(self) -> "AudioProcessingBlock":
-        self.open()
-        return self
-
-    def __exit__(
-        self,
-        exc_type: Optional[Type[BaseException]],
-        exc_value: Optional[BaseException],
-        traceback: Optional[TracebackType],
-    ) -> None:
-        self.close()
-
-    def write(self, data: NumpyFrame) -> None:
-        ...
-
-    def read(self) -> NumpyFrame:
-        ...
-
-    def write_from(self, input_stream: "AudioSource"):
-        ...
-
-    @property
-    def sample_rate(self) -> int:
-        ...
-
-    def __iter__(self) -> Generator[NumpyFrame, None, None]:
-        ...
-
-
-class CollectorBlock(AudioProcessingBlock):
+class CollectorBlock:
     def __init__(
         self,
         sample_rate: int,
         collect_seconds: float,
-        buffer_maxlen: Optional[int] = None,
     ):
-        self.samples: Queue[NumpyFrame] = Queue(maxsize=buffer_maxlen or 0)
         self._sample_rate = sample_rate
-        self._collect_seconds = collect_seconds
-        self.reader_thread = None
+        self._collect_samples = int(collect_seconds * sample_rate)
 
     @property
     def sample_rate(self) -> int:
         return self._sample_rate
 
-    def open(self):
-        ...
-
-    def close(self):
-        ...
-
-    def write(self, data: NumpyFrame):
-        for sample in data:
-            self.samples.put(sample)
-
-    def write_from(self, input_stream: Union[AudioSource, "AudioProcessingBlock"]):
-        def _write():
-            for chunk in input_stream:
-                self.write(chunk)
-
-        self.reader_thread = threading.Thread(target=_write, daemon=True)
-        self.reader_thread.start()
-
-    def read(self) -> NumpyFrame:
+    async def collect(
+        self, input_stream: AsyncIterable[NumpyFrame]
+    ) -> AsyncGenerator[NumpyFrame, None]:
         samples = []
-        while (
-            not self.input_stream_terminated
-            and len(samples) < self._collect_seconds * self._sample_rate
-        ):
-            samples.append(self.samples.get())
-        return NumpyFrame(np.array(samples))
 
-    def __iter__(self) -> Generator[NumpyFrame, None, None]:
-        while True:
-            yield self.read()
-
-
-class RechunkingBlock(Iterable[NumpyFrame]):
-    def __init__(self, input_stream: Iterable[NumpyFrame], chunk_size: int) -> None:
-        self.chunk_size = chunk_size
-        self.input_stream = input_stream
-
-    def rechunk(self, stream: Iterable[NumpyFrame]) -> Generator[NumpyFrame, None, None]:
-        chunks = []
-        for chunk in stream:
-            chunks += chunk.tolist()
-            while len(chunks) >= self.chunk_size:
-                yield NumpyFrame(np.array(chunks[: self.chunk_size]))
-                chunks = chunks[self.chunk_size :]
-        if len(chunks) > 0:
-            yield NumpyFrame(np.array(chunks))
-
-    def __iter__(self) -> Generator[NumpyFrame, None, None]:
-        yield from self.rechunk(self.input_stream)
+        async for frame in input_stream:
+            samples.append(frame)
+            total_samples = sum(len(s) for s in samples)
+            if total_samples >= self._collect_samples:
+                yield NumpyFrame(np.concatenate(samples))
+                samples = []
+        if samples:
+            yield NumpyFrame(np.concatenate(samples))
 
 
-class ResamplingBlock(AudioProcessingBlock):
-    class PreBuffer:
-        def __init__(self, buffer_maxlen: Optional[int] = None):
-            self.buffer: Queue[NumpyFrame] = Queue(maxsize=buffer_maxlen or 0)
-            self.total_frames = 0
-
-        def put(self, data: NumpyFrame):
-            self.total_frames += data.shape[0]
-            self.buffer.put(data)
-
-        def get(self, chunk_size: int) -> Optional[NumpyFrame]:
-            if self.total_frames >= chunk_size:
-                frames = []
-                while chunk_size > 0:
-                    frames.append(self.buffer.get())
-                    chunk_size -= frames[-1].shape[0]
-                self.total_frames -= sum(f.shape[0] for f in frames)
-                return NumpyFrame(np.concatenate(frames))
-            else:
-                return None
-
+class ResamplingBlock:
     def __init__(
         self,
-        original_sample_rate: int = 48000,
-        resample_rate: int = 16000,
+        original_sample_rate: int,
+        resample_rate: int,
         conversion_method: str = "sinc_fastest",
-        chunk_size: int = 1024,
-        buffer_maxlen: Optional[int] = None,
     ):
-        self.buffer: Queue[NumpyFrame] = Queue(maxsize=buffer_maxlen or 0)
-        self.prebuffer = self.PreBuffer(buffer_maxlen=buffer_maxlen)
         self._original_sample_rate = original_sample_rate
         self._resample_rate = resample_rate
-        self._chunk_size = chunk_size
-        self.resampler = Resampler(converter_type=conversion_method, channels=1)
-        self.reader_thread = None
-
-    def open(self):
-        ...
-
-    def close(self):
-        ...
+        self._conversion_method = conversion_method
 
     @property
     def sample_rate(self) -> int:
         return self._resample_rate
 
-    def write(self, data: NumpyFrame):
-        self.prebuffer.put(data)
-        chunk = self.prebuffer.get(self._chunk_size)
-        if chunk is not None:
-            self.buffer.put(self._resample_chunk(chunk))
-
-    def _resample_chunk(self, chunk: NumpyFrame) -> NumpyFrame:
-        return NumpyFrame(
-            self.resampler.process(
-                chunk, ratio=self._resample_rate / self._original_sample_rate
-            ).astype(np.int16)
+    async def resample(
+        self, input_stream: AsyncIterable[NumpyFrame]
+    ) -> AsyncGenerator[NumpyFrame, None]:
+        resampler = Resampler(
+            converter_type=self._conversion_method,
+            channels=1,
         )
-
-    def write_from(self, input_stream: Union[AudioSource, "AudioProcessingBlock"]):
-        def _write():
-            for chunk in input_stream:
-                self.write(chunk)
-
-        self.reader_thread = threading.Thread(target=_write, daemon=True)
-        self.reader_thread.start()
-
-    def iter(self) -> Generator[NumpyFrame, None, None]:
-        while True:
-            yield self.buffer.get()
-
-    def __iter__(self) -> Generator[NumpyFrame, None, None]:
-        yield from self.iter()
-
-    def read(self) -> NumpyFrame:
-        return self.buffer.get()
+        async for frame in input_stream:
+            resampled_data = resampler.process(
+                frame.astype(np.float32),
+                ratio=self._resample_rate / self._original_sample_rate,
+            )
+            yield NumpyFrame(resampled_data.astype(np.int16))
 
 
 __all__ = [
     "AudioSource",
-    "AudioSink",
-    "InputMicStream",
-    "InputFileStream",
     "SocketReceiver",
-    "OutputSpeakerStream",
-    "OutputFileStream",
     "SocketStreamer",
+    "CollectorBlock",
+    "ResamplingBlock",
 ]
