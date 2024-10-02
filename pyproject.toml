@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "easy-audio-interfaces"
-version = "0.1.0"
+version = "0.1.1"
 description = ""
 authors = ["Ankush Malaker <43288948+AnkushMalaker@users.noreply.github.com>"]
 readme = "README.md"

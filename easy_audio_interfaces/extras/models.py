@@ -161,9 +161,9 @@ class SileroVad:
 class WhisperBlock:
     def __init__(
         self,
-        model_description: str = "guillaumekln/faster-whisper-large-v2",
+        model_description: str = "large-v3",
         language: Optional[str] = None,
-        models_root: PathLike = Path("/home/models"),
+        models_root: Optional[PathLike] = None,
     ) -> None:
         try:
             from faster_whisper import WhisperModel
@@ -172,7 +172,7 @@ class WhisperBlock:
         self.language = language or "en"
         self.model = WhisperModel(
             model_description,
-            download_root=str(models_root),
+            download_root=str(models_root) if models_root else None,
         )
         self.feature_extractor = self.model.feature_extractor
 
@@ -187,3 +187,6 @@ class WhisperBlock:
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         return self.transcribe(*args, **kwargs)
+
+
+__all__ = ["SileroVad", "WhisperBlock", "VoiceGate"]

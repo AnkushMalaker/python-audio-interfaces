@@ -5,24 +5,13 @@ import wave
 from queue import Queue
 from socket import AF_INET, SOCK_STREAM, socket
 from types import TracebackType
-from typing import (
-    Dict,
-    Generator,
-    Iterable,
-    Iterator,
-    Optional,
-    Protocol,
-    Sequence,
-    Type,
-    Union,
-    cast,
-)
+from typing import Dict, Generator, Iterable, Optional, Protocol, Type, Union, cast
 
 import numpy as np
 import pyaudio
 from samplerate import Resampler
 
-from easy_audio_interfaces.types.audio import NumpyFrame, Sample
+from easy_audio_interfaces.types.audio import NumpyFrame
 from easy_audio_interfaces.types.common import PathLike
 
 logger = logging.getLogger(__name__)
@@ -57,6 +46,9 @@ class AudioSource(Iterable, Protocol):
 
     @property
     def sample_rate(self) -> int:
+        ...
+
+    def __iter__(self) -> Generator[NumpyFrame, None, None]:
         ...
 
 
@@ -371,17 +363,22 @@ class OutputSpeakerStream(AudioSink):
 
 class OutputFileStream(AudioSink):
     def __init__(self, file_path: PathLike, sample_rate: int, channels: int = 1):
-        self.file_path = str(file_path)
+        self._file_path = str(file_path)
         self._sample_rate = sample_rate
         self.channels = channels
         self.reader_thread = None
+        self._is_open = False
+
+    @property
+    def file_path(self) -> str:
+        return self._file_path
 
     @property
     def sample_rate(self) -> int:
         return self._sample_rate
 
     def open(self):
-        self._file = wave.open(self.file_path, "wb")
+        self._file = wave.open(self._file_path, "wb")
         self._file.setnchannels(self.channels)
         self._file.setsampwidth(2)  # 16 bit
         self._file.setframerate(self.sample_rate)
@@ -648,3 +645,15 @@ class ResamplingBlock(AudioProcessingBlock):
 
     def read(self) -> NumpyFrame:
         return self.buffer.get()
+
+
+__all__ = [
+    "AudioSource",
+    "AudioSink",
+    "InputMicStream",
+    "InputFileStream",
+    "SocketReceiver",
+    "OutputSpeakerStream",
+    "OutputFileStream",
+    "SocketStreamer",
+]
