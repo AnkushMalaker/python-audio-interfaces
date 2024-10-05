@@ -9,7 +9,7 @@ from scipy.io import wavfile
 from easy_audio_interfaces.audio_interfaces import CollectorBlock, SocketReceiver
 from easy_audio_interfaces.types.audio import NumpyFrame
 
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 RECORDINGS_DIR = Path("./recordings")
@@ -39,19 +39,20 @@ async def record_websocket_audio(host: str = "0.0.0.0", port: int = 8080, chunk_
     await receiver.open()
 
     try:
-        logger.info(f"Listening for WebSocket connection on ws://{host}:{port}")
+        logger.info(f"Listening for WebSocket connections on ws://{host}:{port}")
         collector = CollectorBlock(sample_rate=receiver.sample_rate, collect_seconds=chunk_duration)
 
         chunk_count = 0
-        async for waveform in collector.collect(receiver):
-            chunk_count += 1
-            filename = RECORDINGS_DIR / f"chunk_{chunk_count:04d}.wav"
+        while True:  # Run indefinitely
+            async for waveform in collector.collect(receiver):
+                chunk_count += 1
+                filename = RECORDINGS_DIR / f"chunk_{chunk_count:04d}.wav"
 
-            # Convert to int16 for WAV file
-            audio_data = (waveform.normalize() * 32767).astype(np.int16)
+                # Convert to int16 for WAV file
+                audio_data = (waveform.normalize() * 32767).astype(np.int16)
 
-            wavfile.write(filename, receiver.sample_rate, audio_data)
-            logger.info(f"Saved {filename}")
+                wavfile.write(filename, receiver.sample_rate, audio_data)
+                logger.info(f"Saved {filename}")
     finally:
         await receiver.close()
 

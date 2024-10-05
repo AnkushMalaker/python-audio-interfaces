@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+from typing import Optional
 
 import fire
 
@@ -14,7 +15,7 @@ from easy_audio_interfaces.extras.models import WhisperBlock
 logging.basicConfig(level=logging.ERROR)
 
 
-async def main_async(role: str, models_root: str = os.environ.get("MODELS_DIR", "./Models")):
+async def main_async(role: str, models_root: Optional[str] = None):
     transmission_sr = 16000
     if role == "server":
         model = WhisperBlock(model_description="medium.en", models_root=models_root)

@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from asyncio import StreamReader, StreamWriter, open_connection, start_server
+from asyncio import StreamReader, StreamWriter, open_connection
 from typing import AsyncGenerator, AsyncIterable, Callable, Optional, Protocol, Type
 
 import numpy as np
@@ -59,7 +59,7 @@ class SocketReceiver(AudioSource):
         self,
         sample_rate: int = 16000,
         channels: int = 1,
-        port: int = 5000,
+        port: int = 8080,
         host: str = "localhost",
         post_process_callback: Optional[Callable[[bytes], NumpyFrame]] = None,
     ):
@@ -70,6 +70,9 @@ class SocketReceiver(AudioSource):
         self.websocket = None
         self._server = None
         self.post_process_callback = post_process_callback
+        self._frame_queue: asyncio.Queue[NumpyFrame] = asyncio.Queue(
+            maxsize=1000
+        )  # Adjust maxsize as needed
 
     @property
     def sample_rate(self) -> int:
@@ -79,53 +82,64 @@ class SocketReceiver(AudioSource):
     def channels(self) -> int:
         return self._channels
 
-    async def handle_client(self, websocket, path):
+    async def handle_client(self, websocket):
         self.websocket = websocket
         logger.info(f"Accepted connection from {websocket.remote_address}")
+        try:
+            async for frame in self._handle_messages(websocket):
+                await self._frame_queue.put(frame)
+        finally:
+            self.websocket = None
+
+    async def _handle_messages(self, websocket):
+        while True:
+            try:
+                message = await websocket.recv()
+                if self.post_process_callback:
+                    yield self.post_process_callback(message)
+                else:
+                    yield NumpyFrame.frombuffer(message)
+            except websockets.exceptions.ConnectionClosed:
+                logger.info("Client disconnected. Waiting for new connection.")
+                break
 
     async def open(self):
         self._server = await websockets.serve(self.handle_client, self._host, self._port)
         logger.info(f"WebSocket server listening on ws://{self._host}:{self._port}")
-        # Wait until a client connects
+        # Wait for a connection
         while self.websocket is None:
             await asyncio.sleep(0.1)
 
+    async def read(self) -> NumpyFrame:
+        if self._frame_queue.empty():
+            await asyncio.sleep(0.1)  # Avoid busy waiting
+            return NumpyFrame(np.array([], dtype=np.int16))
+        return await self._frame_queue.get()
+
+    async def iter_frames(self) -> AsyncGenerator[NumpyFrame, None]:
+        while True:
+            frame = await self.read()
+            if frame.size > 0:
+                yield frame
+            # Don't break the loop if we receive an empty frame
+
     async def close(self):
-        if self.websocket:
-            await self.websocket.close()
         if self._server:
             self._server.close()
             await self._server.wait_closed()
         logger.info("Closed WebSocket receiver.")
 
-    async def read(self) -> NumpyFrame:
-        assert self.websocket is not None, "WebSocket is not connected."
-        try:
-            data = await self.websocket.recv()
-            if data:
-                if self.post_process_callback:
-                    post_process_data = self.post_process_callback(data)
-                    return post_process_data
-                else:
-                    return NumpyFrame.frombuffer(data)
-            else:
-                logger.info("No data received.")
-                return NumpyFrame(np.array([], dtype=np.int16))
-        except websockets.exceptions.ConnectionClosed:
-            logger.info("WebSocket connection closed.")
-            return NumpyFrame(np.array([], dtype=np.int16))
+    async def __aenter__(self) -> "SocketReceiver":
+        await self.open()
+        return self
 
-    async def iter_frames(self) -> AsyncGenerator[NumpyFrame, None]:
-        logger.debug("Starting frame iteration.")
-        while True:
-            logger.debug("Reading frame.")
-            frame = await self.read()
-            logger.debug(f"Received frame with {len(frame)} samples")
-            if frame.size > 0:
-                yield frame
-            else:
-                break
-        logger.debug("Ending frame iteration.")
+    async def __aexit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc_value: Optional[BaseException],
+        traceback: Optional[Type[BaseException]],
+    ):
+        await self.close()
 
 
 class SocketStreamer:
@@ -228,10 +242,33 @@ class ResamplingBlock:
             yield NumpyFrame(resampled_data.astype(np.int16))
 
 
+class RechunkingBlock:
+    def __init__(self, chunk_size: int):
+        self._chunk_size = chunk_size
+        self._buffer = np.array([], dtype=np.int16)
+
+    async def rechunk(
+        self, input_stream: AsyncIterable[NumpyFrame]
+    ) -> AsyncGenerator[NumpyFrame, None]:
+        async for frame in input_stream:
+            self._buffer = np.concatenate([self._buffer, frame])
+
+            while len(self._buffer) >= self._chunk_size:
+                chunk = self._buffer[: self._chunk_size]
+                self._buffer = self._buffer[self._chunk_size :]
+                yield NumpyFrame(chunk)
+
+        # Yield any remaining samples in the buffer
+        if len(self._buffer) > 0:
+            yield NumpyFrame(self._buffer)
+            self._buffer = np.array([], dtype=np.int16)
+
+
 __all__ = [
     "AudioSource",
     "SocketReceiver",
     "SocketStreamer",
     "CollectorBlock",
     "ResamplingBlock",
+    "RechunkingBlock",
 ]

@@ -17,6 +17,10 @@ rich = "^13.5.3"
 opuslib = "^3.0.1"
 websockets = "^13.1"
 
+[tool.poetry.extras]
+stt = ["faster-whisper"]
+silero-vad = ["torch", "torchaudio"]
+
 [tool.poetry.group.dev.dependencies]
 black = "^23.1.0"
 isort = "^5.12.0"
@@ -61,4 +65,4 @@ build-backend = "poetry.core.masonry.api"
 
 [[tool.mypy.overrides]]
 ignore_missing_imports = true
-module = ["onnxruntime.*", "samplerate.*", "fire.*"]
+module = ["onnxruntime.*", "samplerate.*", "fire.*", "scipy.*"]
