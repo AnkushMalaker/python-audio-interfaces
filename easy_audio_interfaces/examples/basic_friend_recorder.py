@@ -27,7 +27,7 @@ def post_process_audio_chunk(chunk: bytes) -> NumpyFrame:
 
 async def main():
     host = "0.0.0.0"
-    port = 8080
+    port = 8081
 
     receiver = SocketReceiver(
         host=host, port=port, sample_rate=16000, post_process_callback=post_process_audio_chunk

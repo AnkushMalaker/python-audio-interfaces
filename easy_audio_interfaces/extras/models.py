@@ -1,5 +1,5 @@
 from functools import partial
-from typing import Any, AsyncGenerator, AsyncIterable, Callable, List, Optional
+from typing import Any, AsyncGenerator, AsyncIterable, Callable, List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -28,14 +28,23 @@ class VoiceGate:
         self.stopping_patience = stopping_patience
         self.threshold = threshold
         self._gate: bool = False
-        self._frames_in_segment: List[NumpyFrame] = []
         self.cooldown = cool_down
 
         self._starting_patience = starting_patience
         self._stopping_patience = stopping_patience
-        self._cooldown = cool_down
+        self._cooldown = 0  # Start without cooldown
 
-    def next(self, probability: float) -> bool:
+    def next(self, probability: float) -> Tuple[bool, bool, bool]:
+        """
+        Update the gate state based on the given probability.
+
+        Returns:
+            gate_open: whether the gate is open after processing this frame
+            gate_just_opened: whether the gate has just opened
+            gate_just_closed: whether the gate has just closed
+        """
+        gate_was_open = self._gate
+
         if not self._gate:
             if self._cooldown > 0:
                 self._cooldown -= 1
@@ -44,6 +53,8 @@ class VoiceGate:
                 if self._starting_patience <= 0:
                     self._gate = True
                     self._cooldown = self.cooldown
+                    self._starting_patience = self.starting_patience  # Reset for next time
+                    self._stopping_patience = self.stopping_patience  # Reset stopping patience
             else:
                 if self._starting_patience < self.starting_patience:
                     self._starting_patience += 1
@@ -53,49 +64,76 @@ class VoiceGate:
                 if self._stopping_patience <= 0:
                     self._gate = False
                     self._cooldown = self.cooldown
+                    self._starting_patience = self.starting_patience  # Reset starting patience
+                    self._stopping_patience = self.stopping_patience  # Reset for next time
             else:
                 if self._stopping_patience < self.stopping_patience:
                     self._stopping_patience += 1
-        return self._gate
 
-    @torch.inference_mode()
+        gate_just_opened = self._gate and not gate_was_open
+        gate_just_closed = not self._gate and gate_was_open
+
+        return self._gate, gate_just_opened, gate_just_closed
+
     async def iter_segments(
         self, frames: AsyncIterable[NumpyFrame], model: Callable[[torch.Tensor], float]
     ) -> AsyncGenerator[NumpySegment, None]:
-        segment = []
-        buffer = []
-        low_prob_count = 0
+        segment: List[NumpyFrame] = []
+        buffer: List[NumpyFrame] = []
+        frames_since_gate_closed = None
 
         with torch.inference_mode():
             async for frame in frames:
                 input_tensor = torch.tensor(frame.normalize(), dtype=torch.float32)
                 probability = model(input_tensor)
-                if self.next(probability):
-                    if not self._gate and buffer:
-                        segment.extend(buffer)
+                gate_open, gate_just_opened, gate_just_closed = self.next(probability)
+
+                if gate_open:
+                    if gate_just_opened:
+                        # Include buffered frames collected during starting patience
+                        segment = buffer.copy()
                         buffer = []
+                        frames_since_gate_closed = None
                     segment.append(frame)
-                    low_prob_count = 0
                 else:
                     if segment:
-                        low_prob_count += 1
-                        if low_prob_count <= self.stopping_patience:
+                        if frames_since_gate_closed is None:
+                            frames_since_gate_closed = 1
+                        else:
+                            frames_since_gate_closed += 1
+
+                        if frames_since_gate_closed <= self.stopping_patience:
                             segment.append(frame)
                         else:
-                            # Yield the segment when low_prob_count exceeds stopping_patience
-                            segment = segment[: -self.stopping_patience]
+                            # End of segment
                             yield NumpySegment(np.concatenate(segment))
                             segment = []
-                            low_prob_count = 0
-                    if self._starting_patience < self.starting_patience:
-                        buffer.append(frame)
+                            frames_since_gate_closed = None
                     else:
-                        buffer = []
+                        # Buffer frames while waiting for gate to open
+                        buffer.append(frame)
+                        if len(buffer) > self.starting_patience:
+                            buffer.pop(0)
 
+            # Yield any remaining segment
             if segment:
                 yield NumpySegment(np.concatenate(segment))
-            elif buffer:
-                yield NumpySegment(np.concatenate(buffer))
+
+    @classmethod
+    def init_from_seconds(
+        cls,
+        sample_rate: int,
+        starting_patience_seconds: float,
+        stopping_patience_seconds: float,
+        cool_down_seconds: float,
+        threshold: float,
+    ) -> "VoiceGate":
+        return cls(
+            starting_patience=int(starting_patience_seconds * sample_rate),
+            stopping_patience=int(stopping_patience_seconds * sample_rate),
+            cool_down=int(cool_down_seconds * sample_rate),
+            threshold=threshold,
+        )
 
 
 class SileroVad:
