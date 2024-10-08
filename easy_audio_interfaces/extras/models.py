@@ -17,6 +17,13 @@ class VoiceGate:
         cool_down: int = 20,
         threshold: float = 0.5,
     ) -> None:
+        """
+        Args:
+            starting_patience: Number of frames to wait before starting to record.
+            stopping_patience: Number of frames to wait before stopping to record.
+            cool_down: Number of frames to wait before allowing the gate to open again.
+            threshold: Probability threshold to determine if the gate should open.
+        """
         self.starting_patience = starting_patience
         self.stopping_patience = stopping_patience
         self.threshold = threshold
@@ -74,9 +81,9 @@ class VoiceGate:
                         low_prob_count += 1
                         if low_prob_count <= self.stopping_patience:
                             segment.append(frame)
-                        if self._stopping_patience <= 0:
-                            if low_prob_count > self.stopping_patience:
-                                segment = segment[:-low_prob_count]
+                        else:
+                            # Yield the segment when low_prob_count exceeds stopping_patience
+                            segment = segment[: -self.stopping_patience]
                             yield NumpySegment(np.concatenate(segment))
                             segment = []
                             low_prob_count = 0
@@ -85,14 +92,16 @@ class VoiceGate:
                     else:
                         buffer = []
 
-            if segment or buffer:
-                yield NumpySegment(np.concatenate(segment + buffer))
+            if segment:
+                yield NumpySegment(np.concatenate(segment))
+            elif buffer:
+                yield NumpySegment(np.concatenate(buffer))
 
 
 class SileroVad:
     def __init__(self, sampling_rate: int) -> None:
         try:
-            import torch
+            import torch  # type: ignore
         except ImportError:
             raise ImportError(
                 "Please install silero-vad feature to use the SileroVad or install torch."
@@ -118,9 +127,7 @@ class SileroVad:
         return self.model(frame, self.sampling_rate)
 
     async def iter_segments(
-        self,
-        frames: AsyncIterable[NumpyFrame],
-        voice_gate: VoiceGate = VoiceGate(),
+        self, frames: AsyncIterable[NumpyFrame], voice_gate: VoiceGate
     ) -> AsyncGenerator[NumpySegment, None]:
         async for segment in voice_gate.iter_segments(
             frames,
@@ -137,7 +144,7 @@ class WhisperBlock:
         models_root: Optional[PathLike] = None,
     ) -> None:
         try:
-            from faster_whisper import WhisperModel
+            from faster_whisper import WhisperModel  # type: ignore
         except ImportError:
             raise ImportError("Please install stt feature to use the WhisperBlock")
         self.language = language or "en"

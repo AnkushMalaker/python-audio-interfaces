@@ -20,6 +20,7 @@ websockets = "^13.1"
 [tool.poetry.extras]
 stt = ["faster-whisper"]
 silero-vad = ["torch", "torchaudio"]
+bluetooth = ["bleak"]
 
 [tool.poetry.group.dev.dependencies]
 black = "^23.1.0"
@@ -36,6 +37,10 @@ optional = true
 
 [tool.poetry.group.stt.dependencies]
 faster-whisper = "^0.10.0"
+
+[tool.poetry.group.bluetooth.dependencies]
+bleak = "^0.22.3"
+
 
 [tool.poetry.group.silero-vad]
 optional = true

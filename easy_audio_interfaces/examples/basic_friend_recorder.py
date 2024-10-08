@@ -2,64 +2,52 @@ import asyncio
 import logging
 from pathlib import Path
 
-import fire
 import numpy as np
+from opuslib import Decoder
 from scipy.io import wavfile
 
-from easy_audio_interfaces.audio_interfaces import CollectorBlock, SocketReceiver
-from easy_audio_interfaces.types.audio import NumpyFrame
+from easy_audio_interfaces.audio_interfaces import RechunkingBlock, SocketReceiver
+from easy_audio_interfaces.extras.models import SileroVad, VoiceGate
+from easy_audio_interfaces.types import NumpyFrame
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 RECORDINGS_DIR = Path("./recordings")
-
-from opuslib import Decoder
+RECORDINGS_DIR.mkdir(exist_ok=True)
 
 decoder = Decoder(fs=16000, channels=1)
 
 
-def post_process_friend_audio_chunk(chunk: bytes) -> NumpyFrame:
+def post_process_audio_chunk(chunk: bytes) -> NumpyFrame:
     opus_data = chunk[3:]
-    pcm_data = decoder.decode(bytes(opus_data), frame_size=160)
-    return NumpyFrame.frombuffer(pcm_data)
+    pcm_data = decoder.decode(bytes(opus_data), frame_size=960)
+    return NumpyFrame(np.frombuffer(pcm_data, dtype=np.int16))
 
 
-async def record_websocket_audio(host: str = "0.0.0.0", port: int = 8080, chunk_duration: int = 10):
-    RECORDINGS_DIR.mkdir(exist_ok=True)
+async def main():
+    host = "0.0.0.0"
+    port = 8080
 
     receiver = SocketReceiver(
-        host=host,
-        port=port,
-        sample_rate=16000,
-        channels=1,
-        post_process_callback=post_process_friend_audio_chunk,
+        host=host, port=port, sample_rate=16000, post_process_callback=post_process_audio_chunk
     )
-
     await receiver.open()
+    rechunking_block = RechunkingBlock(chunk_size=512)
+    silero_vad = SileroVad(sampling_rate=receiver.sample_rate)
+    voice_gate = VoiceGate(starting_patience=5, stopping_patience=20, cool_down=20, threshold=0.1)
 
+    segment_counter = 0
     try:
-        logger.info(f"Listening for WebSocket connections on ws://{host}:{port}")
-        collector = CollectorBlock(sample_rate=receiver.sample_rate, collect_seconds=chunk_duration)
-
-        chunk_count = 0
-        while True:  # Run indefinitely
-            async for waveform in collector.collect(receiver):
-                chunk_count += 1
-                filename = RECORDINGS_DIR / f"chunk_{chunk_count:04d}.wav"
-
-                # Convert to int16 for WAV file
-                audio_data = (waveform.normalize() * 32767).astype(np.int16)
-
-                wavfile.write(filename, receiver.sample_rate, audio_data)
-                logger.info(f"Saved {filename}")
+        chunk_iterator = rechunking_block.rechunk(receiver)
+        async for voice_segment in silero_vad.iter_segments(chunk_iterator, voice_gate):
+            segment_counter += 1
+            filename = RECORDINGS_DIR / f"voice_segment_{segment_counter}.wav"
+            wavfile.write(filename, 16000, voice_segment)
+            logger.info(f"Saved voice segment to {filename}")
     finally:
         await receiver.close()
 
 
-def main(host: str = "0.0.0.0", port: int = 8080, chunk_duration: int = 10):
-    asyncio.run(record_websocket_audio(host, port, chunk_duration))
-
-
 if __name__ == "__main__":
-    fire.Fire(main)
+    asyncio.run(main())

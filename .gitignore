@@ -10,3 +10,4 @@ easy_audio_interfaces/models
 voice-clips-basic-ai
 dist
 .env
+*.wav
