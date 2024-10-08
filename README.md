@@ -52,3 +52,6 @@ The basic usage of this package  is to import existing implementations of audio 
 - [x] SocketStream
 - [x] CollectorInterface
 - [x] WhisperASRBlock
+
+# Build
+poetry build

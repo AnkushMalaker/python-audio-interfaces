@@ -1,0 +1,73 @@
+version: '3.3'
+
+services:
+  development:
+    build:
+      context: .
+      target: development
+    container_name: eai-development
+    ports:
+      - 8081:80
+      - 8888:8888 # for jupyter notebooks
+    ipc: host
+    environment:
+      - DATA_DIR=/home/data
+      - MODELS_DIR=/home/models
+      - HYDRA_FULL_ERROR=1
+      - LD_LIBRARY_PATH=/opt/conda/pkgs/pytorch-2.0.1-py3.10_cuda11.7_cudnn8.5.0_0/lib/python3.10/site-packages/torch/lib/:$LD_LIBRARY_PATH
+    volumes:
+      - .:/opt/code
+      # NOTE: DATA_DIR is set in .env file, which is not committed to git. You
+      # can set it in your shell environment or create a .env file in the root
+      # directory of this repo.
+      # For example, contents of .env file if your data is in /mnt/harddrive/data:
+      # DATA_DIR=/mnt/harddrive/data
+      # This is required for devcontainer to work.
+      - $DATA_DIR:/home/data
+      - $MODELS_DIR:/home/models
+      - $HOME/.netrc:/root/.netrc:ro
+    devices:
+      - "/dev/snd:/dev/snd"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [ gpu ]
+    command: sh -c "tail -f /dev/null"
+  record-vad-asr:
+    build:
+      context: .
+      target: rva
+    container_name: rva
+    ports:
+      - 8081:80
+      - 8888:8888 # for jupyter notebooks
+    ipc: host
+    environment:
+      - DATA_DIR=/home/data
+      - MODELS_DIR=/home/models
+      - HYDRA_FULL_ERROR=1
+      - LD_LIBRARY_PATH=/opt/conda/pkgs/pytorch-2.0.1-py3.10_cuda11.7_cudnn8.5.0_0/lib/python3.10/site-packages/torch/lib/:$LD_LIBRARY_PATH
+    volumes:
+      - .:/opt/code
+      # NOTE: DATA_DIR is set in .env file, which is not committed to git. You
+      # can set it in your shell environment or create a .env file in the root
+      # directory of this repo.
+      # For example, contents of .env file if your data is in /mnt/harddrive/data:
+      # DATA_DIR=/mnt/harddrive/data
+      # This is required for devcontainer to work.
+      - $DATA_DIR:/home/data
+      - $MODELS_DIR:/home/models
+      - $HOME/.netrc:/root/.netrc:ro
+    devices:
+      - "/dev/snd:/dev/snd"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [ gpu ]
+    command: sh -c "python3 easy_audio_interfaces/examples/basic_ai.py"

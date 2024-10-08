@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "easy-audio-interfaces"
-version = "0.1.0"
+version = "0.1.1"
 description = ""
 authors = ["Ankush Malaker <43288948+AnkushMalaker@users.noreply.github.com>"]
 readme = "README.md"
@@ -14,6 +14,13 @@ types-pyaudio = "^0.2.16.5"
 fire = "^0.5.0"
 scipy = "^1.11.2"
 rich = "^13.5.3"
+opuslib = "^3.0.1"
+websockets = "^13.1"
+
+[tool.poetry.extras]
+stt = ["faster-whisper"]
+silero-vad = ["torch", "torchaudio"]
+bluetooth = ["bleak"]
 
 [tool.poetry.group.dev.dependencies]
 black = "^23.1.0"
@@ -29,8 +36,18 @@ pre-commit = "^3.1.1"
 optional = true
 
 [tool.poetry.group.stt.dependencies]
-faster-whisper = "^0.9.0"
+faster-whisper = "^0.10.0"
 
+[tool.poetry.group.bluetooth.dependencies]
+bleak = "^0.22.3"
+
+
+[tool.poetry.group.silero-vad]
+optional = true
+
+[tool.poetry.group.silero-vad.dependencies]
+torch = "^2.1.2"
+torchaudio = "^2.1.2"
 
 [tool.isort]
 profile = "black"
@@ -45,7 +62,7 @@ exclude = """
 )
 """
 line-length = 100
-target_version = ["py39", "py310"]
+target-version = ["py39", "py310"]
 
 [build-system]
 requires = ["poetry-core"]
@@ -53,4 +70,4 @@ build-backend = "poetry.core.masonry.api"
 
 [[tool.mypy.overrides]]
 ignore_missing_imports = true
-module = ["onnxruntime.*", "samplerate.*"]
+module = ["onnxruntime.*", "samplerate.*", "fire.*", "scipy.*"]
