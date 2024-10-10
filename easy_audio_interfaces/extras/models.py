@@ -159,7 +159,9 @@ class SileroVad:
     def close(self):
         pass
 
-    def __call__(self, frame: NumpyFrame) -> float:
+    def __call__(self, frame: NumpyFrame | torch.Tensor) -> float:
+        if isinstance(frame, np.ndarray):
+            frame = torch.tensor(frame.normalize(), dtype=torch.float32)
         if len(frame) != self.WINDOW_SIZE_SAMPLES:
             raise ValueError(f"Frame size must be {self.WINDOW_SIZE_SAMPLES} but got {len(frame)}")
         return self.model(frame, self.sampling_rate)
@@ -180,6 +182,8 @@ class WhisperBlock:
         model_description: str = "large-v3",
         language: Optional[str] = None,
         models_root: Optional[PathLike] = None,
+        compute_type: str = "default",
+        num_workers: int = 1,
     ) -> None:
         try:
             from faster_whisper import WhisperModel  # type: ignore
@@ -189,6 +193,8 @@ class WhisperBlock:
         self.model = WhisperModel(
             model_description,
             download_root=str(models_root) if models_root else None,
+            compute_type=compute_type,
+            num_workers=num_workers,
         )
         self.feature_extractor = self.model.feature_extractor
 

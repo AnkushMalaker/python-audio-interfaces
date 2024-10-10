@@ -254,7 +254,7 @@ class CollectorBlock:
         return self._sample_rate
 
     async def collect(
-        self, input_stream: AsyncIterable[NumpyFrame]
+        self, input_stream: AsyncIterable[NumpyFrame], terminate: bool = False
     ) -> AsyncGenerator[NumpyFrame, None]:
         samples = []
 
@@ -263,6 +263,8 @@ class CollectorBlock:
             total_samples = sum(len(s) for s in samples)
             if total_samples >= self._collect_samples:
                 yield NumpyFrame(np.concatenate(samples))
+                if terminate:
+                    break
                 samples = []
         if samples:
             yield NumpyFrame(np.concatenate(samples))
@@ -278,6 +280,10 @@ class ResamplingBlock:
         self._original_sample_rate = original_sample_rate
         self._resample_rate = resample_rate
         self._conversion_method = conversion_method
+        self._resampler = Resampler(
+            converter_type=self._conversion_method,
+            channels=1,
+        )
 
     @property
     def sample_rate(self) -> int:
@@ -286,16 +292,19 @@ class ResamplingBlock:
     async def resample(
         self, input_stream: AsyncIterable[NumpyFrame]
     ) -> AsyncGenerator[NumpyFrame, None]:
-        resampler = Resampler(
-            converter_type=self._conversion_method,
-            channels=1,
-        )
         async for frame in input_stream:
-            resampled_data = resampler.process(
+            resampled_data = self._resampler.process(
                 frame.astype(np.float32),
                 ratio=self._resample_rate / self._original_sample_rate,
             )
             yield NumpyFrame(resampled_data.astype(np.int16))
+
+    def resample_chunk(self, chunk: NumpyFrame) -> NumpyFrame:
+        resampled_data = self._resampler.process(
+            chunk.astype(np.float32),
+            ratio=self._resample_rate / self._original_sample_rate,
+        )
+        return NumpyFrame(resampled_data.astype(np.int16))
 
 
 class RechunkingBlock:
