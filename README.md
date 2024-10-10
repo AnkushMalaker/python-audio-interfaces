@@ -1,57 +1,46 @@
-# Easy audio interfaces for python
-# Introduction
-I found that there are many important but hard to get started with concepts that go into voice systems. For example, the understanding chunk sizes in recording audio, resampling, blah blah. But for a person who wants to build an app that takes user words as input, they don't need to know any of that. They should be able to say, take the stream of input audio, find voice, if voice, tell me the text, give me  that text. Don't complicate it. Lets say your application just wants to hear for "send screenshot" and then take a screenshot and send it to the your coding partner. Perhaps here you'd want to listen to audio stream using `InputMicStream()`, combine it with a `WhisperBlockForASR()`. Using `chaining`, you can chain the output of `InputMicStream()` to `WhisperBlockForASR()` and pass the output of that to a condition. This package makes it simple to do that by
-```python
-from audio_interfaces import InputMicStream, WhisperBlockForASR
-
-# Focus on your application logic
-def take_screenshot():
-    ...
-
-def send_screenshot():
-    ...
-
-# Context managers handle closing and opening streams, handling cleanup if saving files required etc.
-with (
-        InputMicStream() as micstream,
-        WhisperBlockForASR() as whisper
-    ):
-        whisper.processor_from(mic_stream) # Configure whisper to use mic_stream. Any conversion of sample_rate etc is handled automatically by the above config.
-        whisper.write_from(mic_stream)
-        # WhisperBlockForASR implements __iter__ so you can iterate over it
-        # Queues handle the rest so you can simply focus on logic
-        for user_said in whisper:
-            if user_said == "send screenshot":
-                take_screenshot()
-                send_screenshot()
-# Check examples/asr_over_network.py for using a raspberry pi to stream data from one room and process in another room in few lines of code.
-```
-
-# Installation
-## Pre-requisites
-Install portaudio if not already installed
-```sudo apt install portaudio19-dev```
-## Install this package
-```pip install git+https://github.com/AnkushMalaker/python-audio-interfaces.git```
-
-# Usage
-Look at examples for more details
-
-The basic usage of this package  is to import existing implementations of audio interfaces from this package or import protocols to subclass from and make your  functionality compatible with easy_audio_interfaces so that you can use the rest of the eco-system.
-
-# Existing Interfaces
-## General Interfaces
-- [x] AudioStream
-- [x] AudioSink
-- [x] AudioProcessingBlock
-## Specific Interfaces
-- [x] InputMicStream
-- [x] OutputSpeakerStream
-- [x] OutputFileStream
-- [x] InputFileStream
-- [x] SocketStream
-- [x] CollectorInterface
-- [x] WhisperASRBlock
-
-# Build
-poetry build
+Easy Audio Interfaces
+Easy Audio Interfaces is a Python library that provides a simple and flexible way to work with audio streams, including recording, playback, network transfer, and processing.
+Features:
+Socket-based audio streaming
+Local file reading and writing
+Audio resampling and rechunking
+Voice activity detection (VAD) using Silero VAD model
+Network file transfer
+Installation:
+To install Easy Audio Interfaces, use pip:
+pip install easy-audio-interfaces
+Usage:
+The library provides various audio interfaces and processing blocks that can be used to build audio processing pipelines. Here are some examples:
+1. Basic Friend Recorder (examples/basic_friend_recorder.py):
+This example demonstrates how to use SocketReceiver, RechunkingBlock, SileroVad, and VoiceGate to record voice segments from a network stream.
+To run:
+python -m easy_audio_interfaces.examples.basic_friend_recorder
+File Network Transfer (examples/file_network_transfer.py):
+This example shows how to transfer audio files over a network using SocketStreamer and SocketReceiver.
+To run as a sender:
+python -m easy_audio_interfaces.examples.file_network_transfer sender input_file.wav --host localhost --port 8080
+To run as a receiver:
+python -m easy_audio_interfaces.examples.file_network_transfer receiver output_file.wav --host 0.0.0.0 --port 8080
+Main Components:
+1. Audio Sources:
+SocketReceiver: Receives audio data over a WebSocket connection.
+LocalFileStreamer: Streams audio data from a local file.
+Audio Sinks:
+SocketStreamer: Sends audio data over a WebSocket connection.
+LocalFileSink: Writes audio data to a local file.
+3. Processing Blocks:
+CollectorBlock: Collects audio samples for a specified duration.
+ResamplingBlock: Resamples audio to a different sample rate.
+RechunkingBlock: Rechunks audio data into fixed-size chunks.
+Voice Activity Detection:
+SileroVad: Uses the Silero VAD model for voice activity detection.
+VoiceGate: Applies voice activity detection to segment audio.
+To use these components, you can create audio processing pipelines by chaining them together. For example:
+async with SocketReceiver() as receiver, LocalFileSink("output.wav") as sink:
+rechunker = RechunkingBlock(chunk_size=512)
+resampler = ResamplingBlock(original_sample_rate=receiver.sample_rate, resample_rate=16000)
+rechunked_stream = rechunker.rechunk(receiver)
+resampled_stream = resampler.resample(rechunked_stream)
+await sink.write_from(resampled_stream)
+This pipeline receives audio from a socket, rechunks it, resamples it to 16kHz, and saves it to a local file.
+For more detailed usage and API documentation, please refer to the docstrings in the source code or the generated API documentation.
