@@ -2,87 +2,23 @@ import asyncio
 import logging
 import wave
 from pathlib import Path
-from typing import AsyncGenerator, AsyncIterable, Callable, Optional, Protocol, Type
+from typing import AsyncGenerator, AsyncIterable, Callable, Optional, Type
 
 import numpy as np
 import websockets
 from samplerate import Resampler
 
+from easy_audio_interfaces.base_interfaces import (
+    AudioSink,
+    AudioSource,
+    ProcessingBlock,
+)
 from easy_audio_interfaces.types.audio import NumpyFrame
 from easy_audio_interfaces.types.common import PathLike
 
 logger = logging.getLogger(__name__)
 
 AUDIO_FORMAT = "int16"
-
-
-class AudioSource(AsyncIterable, Protocol):
-    """Abstract source class that can be used to read from a file or stream."""
-
-    async def read(self) -> NumpyFrame:
-        ...
-
-    async def open(self):
-        ...
-
-    async def close(self):
-        ...
-
-    async def __aenter__(self) -> "AudioSource":
-        await self.open()
-        return self
-
-    async def __aexit__(
-        self,
-        exc_type: Optional[Type[BaseException]],
-        exc_value: Optional[BaseException],
-        traceback: Optional[Type[BaseException]],
-    ):
-        await self.close()
-
-    @property
-    def sample_rate(self) -> int:
-        ...
-
-    @property
-    def channels(self) -> int:
-        ...
-
-    def __aiter__(self) -> AsyncGenerator[NumpyFrame, None]:
-        return self.iter_frames()
-
-    async def iter_frames(self) -> AsyncGenerator[NumpyFrame, None]:
-        async for frame in self:
-            yield frame
-
-
-class AudioSink(AsyncIterable, Protocol):
-    """Abstract sink class that can be used to write to a file or stream."""
-
-    async def write(self, data: NumpyFrame):
-        ...
-
-    async def open(self):
-        ...
-
-    async def close(self):
-        ...
-
-    async def __aenter__(self) -> "AudioSink":
-        await self.open()
-        return self
-
-    async def __aexit__(
-        self,
-        exc_type: Optional[Type[BaseException]],
-        exc_value: Optional[BaseException],
-        traceback: Optional[Type[BaseException]],
-    ):
-        await self.close()
-
-    async def write_from(self, input_stream: AsyncIterable[NumpyFrame]):
-        async for chunk in input_stream:
-            await self.write(chunk)
 
 
 class SocketReceiver(AudioSource):
@@ -240,7 +176,7 @@ class SocketStreamer(AudioSink):
         yield
 
 
-class CollectorBlock:
+class CollectorBlock(ProcessingBlock):
     def __init__(
         self,
         sample_rate: int,
@@ -252,6 +188,9 @@ class CollectorBlock:
     @property
     def sample_rate(self) -> int:
         return self._sample_rate
+
+    async def process(self, input_stream: AsyncIterable[NumpyFrame]) -> AsyncIterable[NumpyFrame]:
+        return self.collect(input_stream)
 
     async def collect(
         self, input_stream: AsyncIterable[NumpyFrame], terminate: bool = False
@@ -270,7 +209,7 @@ class CollectorBlock:
             yield NumpyFrame(np.concatenate(samples))
 
 
-class ResamplingBlock:
+class ResamplingBlock(ProcessingBlock):
     def __init__(
         self,
         original_sample_rate: int,
@@ -306,8 +245,11 @@ class ResamplingBlock:
         )
         return NumpyFrame(resampled_data.astype(np.int16))
 
+    async def process(self, input_stream: AsyncIterable[NumpyFrame]) -> AsyncIterable[NumpyFrame]:
+        return self.resample(input_stream)
 
-class RechunkingBlock:
+
+class RechunkingBlock(ProcessingBlock):
     def __init__(self, chunk_size: int):
         self._chunk_size = chunk_size
         self._buffer = np.array([], dtype=np.int16)
@@ -327,6 +269,13 @@ class RechunkingBlock:
         if len(self._buffer) > 0:
             yield NumpyFrame(self._buffer)
             self._buffer = np.array([], dtype=np.int16)
+
+    async def process(self, input_stream: AsyncIterable[NumpyFrame]) -> AsyncIterable[NumpyFrame]:
+        return self.rechunk(input_stream)
+
+    async def __aiter__(self):
+        # To shut up mypy
+        yield
 
 
 class LocalFileStreamer(AudioSource):
@@ -473,4 +422,5 @@ __all__ = [
     "RechunkingBlock",
     "LocalFileStreamer",
     "LocalFileSink",
+    "ProcessingBlock",
 ]
