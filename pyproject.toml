@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "easy-audio-interfaces"
-version = "0.1.1"
+version = "0.2.1"
 description = ""
 authors = ["Ankush Malaker <43288948+AnkushMalaker@users.noreply.github.com>"]
 readme = "README.md"
@@ -21,6 +21,7 @@ websockets = "^13.1"
 stt = ["faster-whisper"]
 silero-vad = ["torch", "torchaudio"]
 bluetooth = ["bleak"]
+local-audio = ["pyaudio"]
 
 [tool.poetry.group.dev.dependencies]
 black = "^23.1.0"
@@ -41,6 +42,11 @@ faster-whisper = "^0.10.0"
 [tool.poetry.group.bluetooth.dependencies]
 bleak = "^0.22.3"
 
+[tool.poetry.group.local-audio]
+optional = true
+
+[tool.poetry.group.local-audio.dependencies]
+pyaudio = "^0.2.13"
 
 [tool.poetry.group.silero-vad]
 optional = true
