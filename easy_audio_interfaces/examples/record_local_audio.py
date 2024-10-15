@@ -2,7 +2,7 @@ import asyncio
 import time
 
 from easy_audio_interfaces.audio_interfaces import LocalFileSink
-from easy_audio_interfaces.extras.local_audio_sources import InputMicStream
+from easy_audio_interfaces.extras.local_audio import InputMicStream
 
 
 async def record_local_audio(duration: int = 5, output_file: str = "recorded_audio.wav"):
