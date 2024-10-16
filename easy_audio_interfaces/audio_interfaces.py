@@ -1,8 +1,10 @@
 import asyncio
 import logging
+import time
 import wave
+from collections.abc import Coroutine
 from pathlib import Path
-from typing import AsyncGenerator, AsyncIterable, Callable, Optional, Type
+from typing import Any, AsyncGenerator, AsyncIterable, Callable, Optional, Type
 
 import numpy as np
 import websockets
@@ -22,25 +24,53 @@ AUDIO_FORMAT = "int16"
 
 
 class SocketReceiver(AudioSource):
+    """
+    A class that represents a WebSocket audio source receiver.
+
+    This class allows for receiving audio data over a WebSocket connection. It handles
+    client connections, processes incoming audio frames, and manages the WebSocket server.
+
+    Attributes:
+        sample_rate (int): The sample rate of the audio (default is 16000 Hz).
+        channels (int): The number of audio channels (default is 1).
+        port (int): The port on which the WebSocket server listens (default is 8080).
+        host (str): The host address for the WebSocket server (default is "localhost").
+        post_process_bytes_fn (Optional[Callable[[bytes], NumpyFrame]]): A function to process
+            incoming byte data into a NumpyFrame.
+        server_routine (Optional[Coroutine[Any, Any, None]]): An optional coroutine that runs
+            the server routine, defaults to a heartbeat function.
+
+    Methods:
+        handle_client(websocket): Handles incoming client connections and messages.
+        open(): Starts the WebSocket server and waits for a client connection.
+        read() -> NumpyFrame: Reads a frame from the frame queue.
+        iter_frames() -> AsyncGenerator[NumpyFrame, None]: Asynchronously iterates over received frames.
+        stop(): Signals to stop the receiver.
+        close(): Closes the WebSocket server and cleans up resources.
+    """
+
     def __init__(
         self,
         sample_rate: int = 16000,
         channels: int = 1,
         port: int = 8080,
         host: str = "localhost",
-        post_process_callback: Optional[Callable[[bytes], NumpyFrame]] = None,
+        post_process_bytes_fn: Optional[Callable[[bytes], NumpyFrame]] = None,
+        server_routine: Optional[Coroutine[Any, Any, None]] = None,
     ):
         self._sample_rate = sample_rate
         self._channels = channels
         self._port = port
         self._host = host
-        self.websocket = None
+        self.websocket: Optional[websockets.WebSocketServerProtocol] = None
         self._server = None
-        self.post_process_callback = post_process_callback
+        self.post_process_bytes_fn = post_process_bytes_fn
         self._frame_queue: asyncio.Queue[NumpyFrame] = asyncio.Queue(
             maxsize=1000
         )  # Adjust maxsize as needed
         self._stop_event = asyncio.Event()
+        self._server_routine = server_routine or self._send_heartbeat()
+        self._server_task = None
 
     @property
     def sample_rate(self) -> int:
@@ -50,24 +80,53 @@ class SocketReceiver(AudioSource):
     def channels(self) -> int:
         return self._channels
 
-    async def handle_client(self, websocket):
+    async def handle_client(self, websocket: websockets.WebSocketServerProtocol):
+        if self.websocket:
+            logger.warning(
+                "Should only have one client per socket receiver. Check for logical error. Closing existing connection."
+            )
+            await self.websocket.close()
         self.websocket = websocket
+
         logger.info(f"Accepted connection from {websocket.remote_address}")
+
+        self._server_task = asyncio.create_task(self._server_routine)
+
+        await websocket.send("ack")
+
+        frame_counter = 0
         try:
             async for frame in self._handle_messages(websocket):
+                frame_counter += 1
                 await self._frame_queue.put(frame)
         finally:
             self.websocket = None
+            if self._server_task:
+                self._server_task.cancel()
+            await self.stop()
 
-    async def _handle_messages(self, websocket):
-        while True:
+    async def _send_heartbeat(self):
+        while self.websocket and self.websocket.open:
+            try:
+                await self.websocket.send("heartbeat")
+                logger.debug("Heartbeat sent")
+            except websockets.exceptions.WebSocketException:
+                logger.warning("Failed to send heartbeat")
+            await asyncio.sleep(5)  # Send heartbeat every 5 seconds
+
+    async def _handle_messages(self, websocket: websockets.WebSocketServerProtocol):
+        while self.websocket and self.websocket.open:
             try:
                 message = await websocket.recv()
+                if message == "heartbeat":
+                    logger.debug("Heartbeat received")
+                    self._last_recv_heartbeat = time.time()
+                    continue
                 logger.debug(f"Received {len(message)} bytes from {websocket.remote_address}")
-                if self.post_process_callback:
-                    yield self.post_process_callback(message)
+                if self.post_process_bytes_fn:
+                    yield self.post_process_bytes_fn(message)  # type: ignore
                 else:
-                    yield NumpyFrame.frombuffer(message)
+                    yield NumpyFrame.frombuffer(message)  # type: ignore
             except websockets.exceptions.ConnectionClosed:
                 logger.info("Client disconnected. Waiting for new connection.")
                 break
@@ -82,26 +141,19 @@ class SocketReceiver(AudioSource):
         logger.debug("Client connected")
 
     async def read(self) -> NumpyFrame:
-        if self._frame_queue.empty():
-            logger.debug("Frame queue is empty, waiting for new frames...")
-            await asyncio.sleep(0.1)  # Avoid busy waiting
-            return NumpyFrame(np.array([], dtype=np.int16))
         frame = await self._frame_queue.get()
         logger.debug(f"Read frame of size: {len(frame)}")
         return frame
 
     async def iter_frames(self) -> AsyncGenerator[NumpyFrame, None]:
         while not self._stop_event.is_set():
-            frame = await self.read()
-            if frame.size > 0:
-                yield frame
-            else:
-                await asyncio.sleep(0.1)  # Avoid busy waiting
+            yield await self.read()
 
     async def stop(self):
         self._stop_event.set()
 
     async def close(self):
+        await self.stop()
         if self._server:
             self._server.close()
             await self._server.wait_closed()
@@ -123,20 +175,37 @@ class SocketReceiver(AudioSource):
         logger.debug("Starting frame iteration")
         while not self._stop_event.is_set():
             frame = await self.read()
-            if frame.size == 0:
-                logger.debug("Received empty frame, continuing...")
-                continue
             logger.debug(f"Yielding frame of size: {len(frame)}")
             yield frame
         logger.debug("Frame iteration finished")
 
 
 class SocketStreamer(AudioSink):
+    """
+    A class that represents a WebSocket audio sink streamer.
+
+    This class allows for sending audio data over a WebSocket connection. It handles
+    client connections, processes incoming audio frames, and manages the WebSocket server.
+
+    Attributes:
+        sample_rate (int): The sample rate of the audio (default is 16000 Hz).
+        channels (int): The number of audio channels (default is 1).
+        port (int): The port on which the WebSocket server listens (default is 8080).
+        host (str): The host address for the WebSocket server (default is "localhost").
+
+    Methods:
+        open(): Connects to the WebSocket server and waits for a client connection.
+        write(data: NumpyFrame): Sends a frame of audio data to the WebSocket server.
+        write_from(input_stream: AsyncIterable[NumpyFrame]): Writes audio data from an input stream to the WebSocket server.
+        close(): Closes the WebSocket connection and cleans up resources.
+
+    """
+
     def __init__(
         self,
         sample_rate: int = 16000,
         channels: int = 1,
-        port: int = 5000,
+        port: int = 8080,
         host: str = "localhost",
     ):
         self._sample_rate = sample_rate

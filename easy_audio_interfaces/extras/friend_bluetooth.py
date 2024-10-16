@@ -1,6 +1,7 @@
 import asyncio
 import os
 from datetime import datetime
+from typing import Iterable
 
 import opuslib
 from bleak import BleakClient, BleakScanner
@@ -25,8 +26,6 @@ RECORD_DIR = "records"
 if not os.path.exists(RECORD_DIR):
     os.makedirs(RECORD_DIR)
 
-audio_frames = []
-
 
 class FrameProcessor:
     def __init__(self, sample_rate, channels):
@@ -35,6 +34,7 @@ class FrameProcessor:
         self.last_frame_id = -1
         self.pending = bytearray()
         self.lost = 0
+        self.frame_queue = asyncio.Queue()
 
     def store_frame_packet(self, data):
         index = data[0] + (data[1] << 8)
@@ -60,7 +60,7 @@ class FrameProcessor:
             return
 
         if internal == 0:
-            audio_frames.append(self.pending)  # Save frame
+            self.frame_queue.put_nowait(self.pending)  # Save frame
             self.pending = content  # Start new frame
             self.last_frame_id = internal  # Update internal frame id
             self.last_packet_index = index  # Update packet id
@@ -70,22 +70,13 @@ class FrameProcessor:
         self.last_frame_id = internal  # Update internal frame id
         self.last_packet_index = index  # Update packet id
 
-    def decode_frames(self):
+    async def decode_frames(self) -> bytes:
         pcm_data = bytearray()
-        frame_size = (
-            960  # Adjust frame size as per Opus settings (e.g., 960 for 20ms frames at 48kHz)
-        )
-
-        for frame in audio_frames:
-            try:
-                decoded_frame = self.opus_decoder.decode(bytes(frame), frame_size)
-                pcm_data.extend(decoded_frame)
-            except Exception as e:
-                print(f"Error decoding frame: {e}")
+        while self.frame_queue.qsize() > 0:
+            frame_size = 320  # Adjust frame size as per Opus settings (e.g., 960 for 20ms frames at 48kHz, or 320 for 20 ms at 16 kHz)
+            frame = await self.frame_queue.get()
+            pcm_data.extend(self.opus_decoder.decode(bytes(frame), frame_size))
         return pcm_data
-
-
-frame_processor = FrameProcessor(SAMPLE_RATE, CHANNELS)
 
 
 async def find_device_by_name(name=DEVICE_NAME):
@@ -105,6 +96,8 @@ async def find_device_by_name(name=DEVICE_NAME):
 
 
 async def connect_to_device(device):
+    frame_processor = FrameProcessor(SAMPLE_RATE, CHANNELS)
+
     def disconnect_handler(client):
         print("Device disconnected")
         asyncio.get_event_loop().stop()
@@ -121,9 +114,7 @@ async def connect_to_device(device):
             while True:
                 print("Listening for audio data...")
                 await asyncio.sleep(DURATION)
-                pcm_data = frame_processor.decode_frames()
-                frame_processor.pending = bytearray()
-                del audio_frames[:]
+                pcm_data = await frame_processor.decode_frames()
 
                 # Use LocalFileSink to save the audio data
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
