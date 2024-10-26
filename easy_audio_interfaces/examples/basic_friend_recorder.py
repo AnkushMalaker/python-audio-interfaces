@@ -19,7 +19,7 @@ RECORDINGS_DIR.mkdir(exist_ok=True)
 decoder = Decoder(fs=16000, channels=1)
 
 
-def post_process_audio_chunk(chunk: bytes) -> NumpyFrame:
+def decode_friend_message(chunk: bytes) -> NumpyFrame:
     opus_data = chunk[3:]
     pcm_data = decoder.decode(bytes(opus_data), frame_size=960)
     return NumpyFrame(np.frombuffer(pcm_data, dtype=np.int16))
@@ -30,7 +30,7 @@ async def main():
     port = 8081
 
     receiver = SocketReceiver(
-        host=host, port=port, sample_rate=16000, post_process_callback=post_process_audio_chunk
+        host=host, port=port, sample_rate=16000, post_process_bytes_fn=decode_friend_message
     )
     await receiver.open()
     rechunking_block = RechunkingBlock(chunk_size=512)

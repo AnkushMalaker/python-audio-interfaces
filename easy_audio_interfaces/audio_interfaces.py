@@ -172,12 +172,8 @@ class SocketReceiver(AudioSource):
         await self.close()
 
     async def __aiter__(self):
-        logger.debug("Starting frame iteration")
-        while not self._stop_event.is_set():
-            frame = await self.read()
-            logger.debug(f"Yielding frame of size: {len(frame)}")
+        async for frame in self.iter_frames():
             yield frame
-        logger.debug("Frame iteration finished")
 
 
 class SocketStreamer(AudioSink):

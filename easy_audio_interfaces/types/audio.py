@@ -9,8 +9,13 @@ Sample = np.int16
 
 
 class NumpyFrame(NDArray[Sample]):
-    def __new__(cls, input_array, sample_rate: Optional[int] = None):
-        obj = np.asarray(input_array, dtype=np.int16).view(cls)
+    sample_rate: Optional[int]
+
+    def __new__(cls, input: bytes | NDArray[Sample], sample_rate: Optional[int] = None):
+        if isinstance(input, bytes):
+            obj = np.frombuffer(input, dtype=np.int16).view(cls)
+        else:
+            obj = np.asarray(input, dtype=np.int16).view(cls)
         obj.sample_rate = sample_rate
         return obj
 
@@ -21,6 +26,7 @@ class NumpyFrame(NDArray[Sample]):
 
     @classmethod
     def frombuffer(cls, buffer: bytes) -> "NumpyFrame":
+        # Perhaps redundant after expanding scope of what 'input' in __new__ can be
         return np.frombuffer(buffer, dtype=np.int16).view(cls)
 
     def normalize(self) -> NDArray[np.float32]:
