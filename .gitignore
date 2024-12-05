@@ -11,3 +11,4 @@ voice-clips-basic-ai
 dist
 .env
 *.wav
+.mypy_cache

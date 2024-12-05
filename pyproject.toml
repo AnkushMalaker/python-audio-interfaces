@@ -16,6 +16,7 @@ scipy = "^1.11.2"
 rich = "^13.5.3"
 opuslib = "^3.0.1"
 websockets = "^13.1"
+pydub = "^0.25.1"
 
 [tool.poetry.extras]
 stt = ["faster-whisper"]
@@ -26,28 +27,36 @@ local-audio = ["pyaudio"]
 [tool.poetry.group.dev.dependencies]
 black = "^23.1.0"
 isort = "^5.12.0"
-pytest = "^7.2.1"
 ipython = "^8.10.0"
 ipdb = "^0.13.11"
 mypy = "^1.0.0"
 pynvim = "^0.4.3"
 pre-commit = "^3.1.1"
+pytest = "^8.3.4"
+pytest-asyncio = "^0.24.0"
 
+# STT
 [tool.poetry.group.stt]
 optional = true
 
 [tool.poetry.group.stt.dependencies]
 faster-whisper = "^0.10.0"
 
+# Bluetooth
+[tool.poetry.group.bluetooth]
+optional = true
+
 [tool.poetry.group.bluetooth.dependencies]
 bleak = "^0.22.3"
 
+# Local Audio
 [tool.poetry.group.local-audio]
 optional = true
 
 [tool.poetry.group.local-audio.dependencies]
 pyaudio = "^0.2.13"
 
+# Silero VAD
 [tool.poetry.group.silero-vad]
 optional = true
 
@@ -55,6 +64,7 @@ optional = true
 torch = "^2.1.2"
 torchaudio = "^2.1.2"
 
+# Formatting
 [tool.isort]
 profile = "black"
 
@@ -74,6 +84,17 @@ target-version = ["py39", "py310"]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
 
+# Mypy
+[tool.mypy]
+files = ["easy_audio_interfaces"]
+
 [[tool.mypy.overrides]]
 ignore_missing_imports = true
-module = ["onnxruntime.*", "samplerate.*", "fire.*", "scipy.*"]
+module = [
+  "onnxruntime.*",
+  "samplerate.*",
+  "fire.*",
+  "scipy.*",
+  "pydub.*",
+  "torchaudio.*",
+]
