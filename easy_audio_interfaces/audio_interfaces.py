@@ -137,6 +137,7 @@ class SocketReceiver(AudioSource):
         logger.info(f"WebSocket server listening on ws://{self._host}:{self._port}")
         logger.debug("Waiting for a client connection...")
         while self.websocket is None:
+            logger.debug("Waiting for a client connection...")
             await asyncio.sleep(0.1)
         logger.debug("Client connected")
 
@@ -430,6 +431,8 @@ class LocalFileSink(AudioSink):
 
     async def open(self):
         logger.debug(f"Opening file for writing: {self._file_path}")
+        if not self._file_path.parent.exists():
+            raise RuntimeError(f"Parent directory does not exist: {self._file_path.parent}")
         self._wave_file = wave.open(str(self._file_path), "wb")
         self._wave_file.setnchannels(self._channels)
         self._wave_file.setsampwidth(self._sample_width)
