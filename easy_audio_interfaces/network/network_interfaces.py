@@ -223,8 +223,8 @@ class SocketStreamer(AudioSink):
         assert self.websocket is not None, "WebSocket is not connected."
         # Convert AudioSegment to bytes
         raw_data = data.raw_data
-        await self.websocket.send(raw_data)
-        logger.debug(f"Sent {len(raw_data)} bytes to {self.websocket.remote_address}")
+        await self.websocket.send(raw_data)  # type: ignore
+        logger.debug(f"Sent {len(raw_data)} bytes to {self.websocket.remote_address}")  # type: ignore
 
     async def write_from(self, input_stream: AsyncIterable[AudioSegment]):
         async for chunk in input_stream:
