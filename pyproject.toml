@@ -97,4 +97,5 @@ module = [
   "scipy.*",
   "pydub.*",
   "torchaudio.*",
+  "opuslib.*",
 ]

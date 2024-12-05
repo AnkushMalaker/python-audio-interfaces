@@ -1,12 +1,9 @@
-# test_audio_interfaces.py
-
-import asyncio
-from typing import AsyncGenerator, AsyncIterable, cast
-
 import pytest
 from pydub import AudioSegment, generators
 
 from easy_audio_interfaces import LocalFileSink, RechunkingBlock, ResamplingBlock
+
+from .utils import async_generator
 
 SINE_FREQUENCY = 440
 SINE_SAMPLE_RATE = 44100
@@ -15,15 +12,6 @@ SINE_SAMPLE_RATE = 44100
 def create_sine_wave_segment(duration_ms: int) -> AudioSegment:
     sine_wave = generators.Sine(freq=SINE_FREQUENCY, sample_rate=int(SINE_SAMPLE_RATE))
     return sine_wave.to_audio_segment(duration=duration_ms)
-
-
-async def async_generator(wav_segment: AudioSegment) -> AsyncGenerator[AudioSegment, None]:
-    # Split the 10-second wav_segment into 1-second chunks
-    chunk_duration_ms = 1000
-    for i in range(0, len(wav_segment), chunk_duration_ms):
-        chunk = cast(AudioSegment, wav_segment[i : i + chunk_duration_ms])
-        await asyncio.sleep(0.0)  # simulate async
-        yield chunk
 
 
 @pytest.mark.asyncio

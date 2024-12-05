@@ -12,3 +12,4 @@ dist
 .env
 *.wav
 .mypy_cache
+.vscode

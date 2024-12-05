@@ -1,9 +1,11 @@
-from typing import AsyncIterable, AsyncIterator, Optional, Protocol, Type
+from typing import AsyncIterator, Optional, Protocol, Type
 
 from pydub import AudioSegment
 
+from easy_audio_interfaces.types.common import AudioStream
 
-class AudioSource(Protocol):
+
+class AudioSource(AudioStream, Protocol):
     """Abstract source class that can be used to read from a file or stream."""
 
     async def read(self) -> Optional[AudioSegment]:
@@ -72,7 +74,7 @@ class AudioSink(Protocol):
     ):
         await self.close()
 
-    async def write_from(self, input_stream: AsyncIterable[AudioSegment]):
+    async def write_from(self, input_stream: AudioStream):
         async for chunk in input_stream:
             await self.write(chunk)
 
@@ -80,7 +82,7 @@ class AudioSink(Protocol):
 class ProcessingBlock(Protocol):
     """Abstract processing block that can be used to process audio data."""
 
-    def process(self, input_stream: AsyncIterable[AudioSegment]) -> AsyncIterable[AudioSegment]:
+    def process(self, input_stream: AudioStream) -> AudioStream:
         ...
 
     async def open(self):

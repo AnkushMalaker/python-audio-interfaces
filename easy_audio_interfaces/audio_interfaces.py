@@ -1,7 +1,6 @@
 import logging
-from typing import AsyncGenerator, AsyncIterable, cast
+from typing import cast
 
-import pytest
 from pydub import AudioSegment
 
 from easy_audio_interfaces.base_interfaces import (
@@ -9,6 +8,7 @@ from easy_audio_interfaces.base_interfaces import (
     AudioSource,
     ProcessingBlock,
 )
+from easy_audio_interfaces.types.common import AudioStream
 
 logger = logging.getLogger(__name__)
 
@@ -25,9 +25,7 @@ class ResamplingBlock(ProcessingBlock):
         return self._resample_rate
 
     # FIXME: Why the type error?
-    async def process(
-        self, input_stream: AsyncIterable[AudioSegment]
-    ) -> AsyncGenerator[AudioSegment, None]:
+    async def process(self, input_stream: AudioStream) -> AudioStream:
         async for frame in input_stream:
             # Use AudioSegment's built-in frame rate conversion
             frame = cast(AudioSegment, frame.set_frame_rate(self._resample_rate))
@@ -51,9 +49,7 @@ class RechunkingBlock(ProcessingBlock):
         self._chunk_size_samples = chunk_size_samples
         self._buffer: AudioSegment = AudioSegment.silent(duration=0)
 
-    async def _process_chunk_ms(
-        self, input_stream: AsyncIterable[AudioSegment]
-    ) -> AsyncIterable[AudioSegment]:
+    async def _process_chunk_ms(self, input_stream: AudioStream) -> AudioStream:
         async for frame in input_stream:
             self._buffer += frame
             assert self._chunk_size_ms is not None
@@ -68,9 +64,7 @@ class RechunkingBlock(ProcessingBlock):
             yield self._buffer
             self._buffer = AudioSegment.silent(duration=0)
 
-    async def _process_chunk_samples(
-        self, input_stream: AsyncIterable[AudioSegment]
-    ) -> AsyncIterable[AudioSegment]:
+    async def _process_chunk_samples(self, input_stream: AudioStream) -> AudioStream:
         assert self._chunk_size_samples is not None
         chunk_size = self._chunk_size_samples
         async for frame in input_stream:
@@ -96,7 +90,7 @@ class RechunkingBlock(ProcessingBlock):
             yield self._buffer
             self._buffer = AudioSegment.silent(duration=0)
 
-    def process(self, input_stream: AsyncIterable[AudioSegment]) -> AsyncIterable[AudioSegment]:
+    def process(self, input_stream: AudioStream) -> AudioStream:
         if self._chunk_size_ms is not None:
             return self._process_chunk_ms(input_stream)
         else:
