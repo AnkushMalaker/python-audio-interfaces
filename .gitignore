@@ -13,3 +13,4 @@ dist
 *.wav
 .mypy_cache
 .vscode
+*.excalidraw

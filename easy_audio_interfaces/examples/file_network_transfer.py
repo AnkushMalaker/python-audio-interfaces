@@ -3,9 +3,8 @@ import logging
 
 import fire
 
-from easy_audio_interfaces.audio_interfaces import (
-    LocalFileSink,
-    LocalFileStreamer,
+from easy_audio_interfaces import LocalFileSink, LocalFileStreamer
+from easy_audio_interfaces.network.network_interfaces import (
     SocketReceiver,
     SocketStreamer,
 )

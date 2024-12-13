@@ -64,6 +64,15 @@ optional = true
 torch = "^2.1.2"
 torchaudio = "^2.1.2"
 
+# Wyoming Protocol
+
+# Silero VAD
+[tool.poetry.group.wyoming]
+optional = true
+
+[tool.poetry.group.wyoming.dependencies]
+wyoming = { version = "^1.6.0" }
+
 # Formatting
 [tool.isort]
 profile = "black"

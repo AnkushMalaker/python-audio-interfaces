@@ -13,6 +13,18 @@ from easy_audio_interfaces.types.common import AudioStream
 logger = logging.getLogger(__name__)
 
 
+# TODO
+class StreamFromCommand(AudioSource):
+    def __init__(self, command: str):
+        self._command = command
+
+    async def open(self):
+        ...
+
+    async def close(self):
+        ...
+
+
 class ResamplingBlock(ProcessingBlock):
     def __init__(
         self,

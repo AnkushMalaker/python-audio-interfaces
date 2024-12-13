@@ -750,13 +750,13 @@ test = ["objgraph", "psutil"]
 
 [[package]]
 name = "huggingface-hub"
-version = "0.26.3"
+version = "0.26.5"
 description = "Client library to download and publish models, datasets and other repos on the huggingface.co hub"
 optional = false
 python-versions = ">=3.8.0"
 files = [
-    {file = "huggingface_hub-0.26.3-py3-none-any.whl", hash = "sha256:e66aa99e569c2d5419240a9e553ad07245a5b1300350bfbc5a4945cf7432991b"},
-    {file = "huggingface_hub-0.26.3.tar.gz", hash = "sha256:90e1fe62ffc26757a073aaad618422b899ccf9447c2bba8c902a90bef5b42e1d"},
+    {file = "huggingface_hub-0.26.5-py3-none-any.whl", hash = "sha256:fb7386090bbe892072e64b85f7c4479fd2d65eea5f2543327c970d5169e83924"},
+    {file = "huggingface_hub-0.26.5.tar.gz", hash = "sha256:1008bd18f60bfb65e8dbc0a97249beeeaa8c99d3c2fa649354df9fa5a13ed83b"},
 ]
 
 [package.dependencies]
@@ -2819,6 +2819,21 @@ winrt-runtime = "2.3.0"
 [package.extras]
 all = ["winrt-Windows.Foundation.Collections[all] (==2.3.0)", "winrt-Windows.Foundation[all] (==2.3.0)", "winrt-Windows.Storage[all] (==2.3.0)", "winrt-Windows.System[all] (==2.3.0)"]
 
+[[package]]
+name = "wyoming"
+version = "1.6.0"
+description = "Protocol for Rhasspy Voice Assistant"
+optional = false
+python-versions = "*"
+files = [
+    {file = "wyoming-1.6.0-py3-none-any.whl", hash = "sha256:e0a4cd436232e38cd86099035149a723e1e288ca478b65cde3483f40bbfe06c4"},
+    {file = "wyoming-1.6.0.tar.gz", hash = "sha256:02b85796eb51c4e9b9066f0d9ccf6f3ecabaeb357305a1a12d43eedfadf7593f"},
+]
+
+[package.extras]
+http = ["Flask (==3.0.2)", "swagger-ui-py (==23.9.23)"]
+zeroconf = ["zeroconf (==0.88.0)"]
+
 [extras]
 bluetooth = []
 local-audio = ["pyaudio"]
@@ -2828,4 +2843,4 @@ stt = []
 [metadata]
 lock-version = "2.0"
 python-versions = ">=3.9,<3.13"
-content-hash = "161d8575d87998cc8668d85fac274b95222c3b0601937baf175efb3108578166"
+content-hash = "1face9f57cc7f3aa35e729f99c08ec33a5e421c9a82c1006d3d3d0036b69f035"
