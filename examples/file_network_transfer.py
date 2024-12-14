@@ -4,10 +4,7 @@ import logging
 import fire
 
 from easy_audio_interfaces import LocalFileSink, LocalFileStreamer
-from easy_audio_interfaces.network.network_interfaces import (
-    SocketReceiver,
-    SocketStreamer,
-)
+from easy_audio_interfaces.network.network_interfaces import SocketClient, SocketServer
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
@@ -16,7 +13,7 @@ logger = logging.getLogger(__name__)
 async def sender(input_file: str, host: str = "localhost", port: int = 8080):
     logger.info(f"Sending file: {input_file}")
     async with LocalFileStreamer(input_file) as file_source:
-        async with SocketStreamer(
+        async with SocketClient(
             sample_rate=file_source.sample_rate,
             channels=file_source.channels,
             host=host,
@@ -30,7 +27,7 @@ async def receiver(
     output_file: str, host: str = "0.0.0.0", port: int = 8080, timeout: float = 30.0
 ):
     logger.info(f"Receiving audio and saving to: {output_file}")
-    async with SocketReceiver(host=host, port=port) as socket_source:
+    async with SocketServer(host=host, port=port) as socket_source:
         logger.info(
             f"SocketReceiver opened. Sample rate: {socket_source.sample_rate}, Channels: {socket_source.channels}"
         )

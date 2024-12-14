@@ -14,3 +14,4 @@ dist
 .mypy_cache
 .vscode
 *.excalidraw
+easy_audio_interfaces.egg-info

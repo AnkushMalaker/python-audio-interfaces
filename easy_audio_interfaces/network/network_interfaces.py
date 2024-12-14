@@ -13,7 +13,7 @@ from easy_audio_interfaces.base_interfaces import AudioSink, AudioSource
 logger = logging.getLogger(__name__)
 
 
-class SocketReceiver(AudioSource):
+class SocketServer(AudioSource):
     """
     A class that represents a WebSocket audio source receiver.
 
@@ -116,7 +116,12 @@ class SocketReceiver(AudioSource):
                 if self.post_process_bytes_fn:
                     yield self.post_process_bytes_fn(message)  # type: ignore
                 else:
-                    yield AudioSegment.from_raw_data(message)  # type: ignore
+                    yield AudioSegment(
+                        data=message,
+                        sample_width=2,
+                        frame_rate=self._sample_rate,
+                        channels=self._channels,
+                    )
             except websockets.exceptions.ConnectionClosed:
                 logger.info("Client disconnected. Waiting for new connection.")
                 break
@@ -150,7 +155,7 @@ class SocketReceiver(AudioSource):
             await self._server.wait_closed()
         logger.info("Closed WebSocket receiver.")
 
-    async def __aenter__(self) -> "SocketReceiver":
+    async def __aenter__(self) -> "SocketServer":
         await self.open()
         return self
 
@@ -167,7 +172,7 @@ class SocketReceiver(AudioSource):
             yield frame
 
 
-class SocketStreamer(AudioSink):
+class SocketClient(AudioSink):
     """
     A class that represents a WebSocket audio sink streamer.
 
