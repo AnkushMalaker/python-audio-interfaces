@@ -14,7 +14,7 @@ from easy_audio_interfaces.extras.friend_bluetooth import (
     AUDIO_DATA_STREAM_UUID,
     DEVICE_NAME,
     SERVICE_UUID,
-    FrameProcessor,
+    FriendFrameProcessor,
     find_device_by_name,
 )
 from easy_audio_interfaces.types import NumpyFrame
@@ -33,7 +33,7 @@ decoder = Decoder(SAMPLE_RATE, CHANNELS)
 
 
 async def bluetooth_client(host, port):
-    frame_processor = FrameProcessor(SAMPLE_RATE, CHANNELS)
+    frame_processor = FriendFrameProcessor(SAMPLE_RATE, CHANNELS)
     device = await find_device_by_name(DEVICE_NAME)
     logger.info(f"Found device: {device}")
     if device is None:
