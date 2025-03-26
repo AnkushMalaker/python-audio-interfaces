@@ -1,12 +1,11 @@
 import asyncio
 import logging
-from typing import AsyncGenerator, Coroutine, Optional, Type
+from typing import Optional, Type
 
-import numpy as np
 import pyaudio
+from pydub import AudioSegment
 
 from easy_audio_interfaces.audio_interfaces import AudioSink, AudioSource
-from easy_audio_interfaces.types.audio import NumpyFrame
 
 logger = logging.getLogger(__name__)
 
@@ -80,12 +79,14 @@ class InputMicStream(PyAudioInterface, AudioSource):
             logger.info("Input stream closed")
         self._stop_event.set()
 
-    async def read(self) -> NumpyFrame:
+    async def read(self) -> AudioSegment:
         if self._stream is None:
             raise RuntimeError("Stream is not open. Call 'open()' first.")
 
         data = self._stream.read(self._chunk_size)
-        return NumpyFrame(np.frombuffer(data, dtype=np.int16))
+        return AudioSegment(
+            data, sample_width=2, frame_rate=self._sample_rate, channels=self._channels
+        )
 
     async def iter_frames(self):
         while not self._stop_event.is_set():
@@ -147,10 +148,10 @@ class OutputSpeakerStream(PyAudioInterface, AudioSink):
             self._stream.close()
             logger.info("Output stream closed")
 
-    async def write(self, frame: NumpyFrame):
+    def write(self, frame: AudioSegment):
         if self._stream is None:
             raise RuntimeError("Stream is not open. Call 'open()' first.")
-        self._stream.write(frame.tobytes())
+        self._stream.write(frame.raw_data)  # type: ignore
 
     async def __aenter__(self) -> "OutputSpeakerStream":
         await self.open()
@@ -164,30 +165,34 @@ class OutputSpeakerStream(PyAudioInterface, AudioSink):
     ):
         await self.close()
 
-    async def __aiter__(self) -> AsyncGenerator[NumpyFrame, None]:
-        ...
-
-    def write_from(self, audio_source: AudioSource) -> Coroutine:
+    async def write_from(self, audio_source: AudioSource):
         async def _write_from():
             try:
                 async for frame in audio_source:
-                    await self.write(frame)
+                    self.write(frame)
             except asyncio.CancelledError:
                 logger.info("write_from task cancelled")
 
-        return _write_from()
+        await _write_from()
 
 
 async def main():
     RUN_FOR = 10
     async with InputMicStream() as mic, OutputSpeakerStream() as speaker:
-        write_task = asyncio.create_task(speaker.write_from(mic))
-        await asyncio.sleep(RUN_FOR)
-        write_task.cancel()
-        await write_task  # Wait for the task to be cancelled
+        # This is the non-blocking version.
+        # write_task = asyncio.create_task(speaker.write_from(mic))
+        # await asyncio.sleep(RUN_FOR)
+        # write_task.cancel()
+        # await write_task  # Wait for the task to be cancelled
 
         # Or simply:
         # await speaker.write_from(mic)
+
+        # or even more simply:
+        async for frame in mic:
+            frame = frame + 5  # Do some processing
+            print(frame.dBFS)
+            speaker.write(frame)
 
 
 if __name__ == "__main__":

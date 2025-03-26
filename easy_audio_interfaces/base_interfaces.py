@@ -1,12 +1,15 @@
-from typing import AsyncGenerator, AsyncIterable, Optional, Protocol, Type
+from typing import AsyncIterator, Optional, Protocol, Type
 
-from easy_audio_interfaces.types.audio import NumpyFrame
+from pydub import AudioSegment
+
+from easy_audio_interfaces.types.common import AudioStream
 
 
-class AudioSource(AsyncIterable, Protocol):
+class AudioSource(AudioStream, Protocol):
     """Abstract source class that can be used to read from a file or stream."""
 
-    async def read(self) -> NumpyFrame:
+    async def read(self) -> Optional[AudioSegment]:
+        """Read the next audio segment. Return None if no more data."""
         ...
 
     async def open(self):
@@ -28,25 +31,29 @@ class AudioSource(AsyncIterable, Protocol):
         await self.close()
 
     @property
-    def sample_rate(self) -> int:
+    def sample_rate(self) -> int | float:
         ...
 
     @property
     def channels(self) -> int:
         ...
 
-    def __aiter__(self) -> AsyncGenerator[NumpyFrame, None]:
+    def __aiter__(self) -> AsyncIterator[AudioSegment]:
         return self.iter_frames()
 
-    async def iter_frames(self) -> AsyncGenerator[NumpyFrame, None]:
-        async for frame in self:
+    async def iter_frames(self) -> AsyncIterator[AudioSegment]:
+        """Iterate over audio frames."""
+        while True:
+            frame = await self.read()
+            if frame is None:
+                break
             yield frame
 
 
-class AudioSink(AsyncIterable, Protocol):
+class AudioSink(Protocol):
     """Abstract sink class that can be used to write to a file or stream."""
 
-    async def write(self, data: NumpyFrame):
+    async def write(self, data: AudioSegment):
         ...
 
     async def open(self):
@@ -67,22 +74,22 @@ class AudioSink(AsyncIterable, Protocol):
     ):
         await self.close()
 
-    async def write_from(self, input_stream: AsyncIterable[NumpyFrame]):
+    async def write_from(self, input_stream: AudioStream):
         async for chunk in input_stream:
             await self.write(chunk)
 
 
-class ProcessingBlock(AsyncIterable, Protocol):
-    """Abstract processing block class that can be used to process audio data."""
+class ProcessingBlock(Protocol):
+    """Abstract processing block that can be used to process audio data."""
 
-    async def process(self, input_stream: AsyncIterable[NumpyFrame]) -> AsyncIterable[NumpyFrame]:
+    def process(self, input_stream: AudioStream) -> AudioStream:
         ...
 
     async def open(self):
-        pass
+        ...
 
     async def close(self):
-        pass
+        ...
 
     async def __aenter__(self) -> "ProcessingBlock":
         await self.open()

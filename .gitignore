@@ -11,3 +11,7 @@ voice-clips-basic-ai
 dist
 .env
 *.wav
+.mypy_cache
+.vscode
+*.excalidraw
+easy_audio_interfaces.egg-info

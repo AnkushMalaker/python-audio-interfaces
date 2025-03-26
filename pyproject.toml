@@ -1,79 +1,72 @@
-[tool.poetry]
+[project]
 name = "easy-audio-interfaces"
 version = "0.2.1"
 description = ""
-authors = ["Ankush Malaker <43288948+AnkushMalaker@users.noreply.github.com>"]
 readme = "README.md"
-packages = [{ include = "easy_audio_interfaces" }]
+requires-python = ">=3.9,<3.13"
+authors = [
+  { name = "Ankush Malaker", email = "43288948+AnkushMalaker@users.noreply.github.com" },
+]
+dependencies = [
+  "pyaudio>=0.2.13,<0.3.0",
+  "samplerate>=0.1.0,<0.2.0",
+  "types-pyaudio>=0.2.16.5,<0.3.0",
+  "fire>=0.5.0,<0.6.0",
+  "scipy>=1.11.2,<1.12.0",
+  "rich>=13.5.3,<14.0.0",
+  "opuslib>=3.0.1,<4.0.0",
+  "websockets>=13.1,<14.0",
+  "pydub>=0.25.1,<0.26.0",
+]
+optional-dependencies = { stt = [
+  "faster-whisper",
+], silero-vad = [
+  "torch",
+  "torchaudio",
+], bluetooth = [
+  "bleak",
+], local-audio = [
+  "pyaudio",
+] }
 
-[tool.poetry.dependencies]
-python = ">=3.9,<3.13"
-pyaudio = "^0.2.13"
-samplerate = "^0.1.0"
-types-pyaudio = "^0.2.16.5"
-fire = "^0.5.0"
-scipy = "^1.11.2"
-rich = "^13.5.3"
-opuslib = "^3.0.1"
-websockets = "^13.1"
+# [project.scripts]
+# Define any CLI scripts here if needed
 
-[tool.poetry.extras]
-stt = ["faster-whisper"]
-silero-vad = ["torch", "torchaudio"]
-bluetooth = ["bleak"]
-local-audio = ["pyaudio"]
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
 
-[tool.poetry.group.dev.dependencies]
-black = "^23.1.0"
-isort = "^5.12.0"
-pytest = "^7.2.1"
-ipython = "^8.10.0"
-ipdb = "^0.13.11"
-mypy = "^1.0.0"
-pynvim = "^0.4.3"
-pre-commit = "^3.1.1"
+# [tool.uv]
+# uv-specific configurations can be added here
 
-[tool.poetry.group.stt]
-optional = true
-
-[tool.poetry.group.stt.dependencies]
-faster-whisper = "^0.10.0"
-
-[tool.poetry.group.bluetooth.dependencies]
-bleak = "^0.22.3"
-
-[tool.poetry.group.local-audio]
-optional = true
-
-[tool.poetry.group.local-audio.dependencies]
-pyaudio = "^0.2.13"
-
-[tool.poetry.group.silero-vad]
-optional = true
-
-[tool.poetry.group.silero-vad.dependencies]
-torch = "^2.1.2"
-torchaudio = "^2.1.2"
-
+[tool.setuptools]
+packages = ["easy_audio_interfaces"]
 [tool.isort]
 profile = "black"
 
 [tool.black]
-exclude = """
+exclude = '''
 (
   .venv
   | .git
   | lightning_logs
   | multirun
 )
-"""
+'''
 line-length = 100
 target-version = ["py39", "py310"]
 
-[build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
+[tool.mypy]
+files = ["easy_audio_interfaces"]
 
 [[tool.mypy.overrides]]
+module = [
+  "onnxruntime.*",
+  "samplerate.*",
+  "fire.*",
+  "scipy.*",
+  "pydub.*",
+  "torchaudio.*",
+  "opuslib.*",
+]
 ignore_missing_imports = true
-module = ["onnxruntime.*", "samplerate.*", "fire.*", "scipy.*"]
