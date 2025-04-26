@@ -40,7 +40,13 @@ build-backend = "setuptools.build_meta"
 # uv-specific configurations can be added here
 
 [tool.setuptools]
-packages = ["easy_audio_interfaces"]
+platforms = ["any"]
+zip-safe  = true
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["easy_audio_interfaces*"]
+
 [tool.isort]
 profile = "black"
 
