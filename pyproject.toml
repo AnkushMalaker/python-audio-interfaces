@@ -14,7 +14,7 @@ dependencies = [
   "fire>=0.5.0,<0.6.0",
   "rich>=13.5.3,<14.0.0",
   "opuslib>=3.0.1,<4.0.0",
-  "websockets>=13.1,<14.0",
+  "websockets>=14.0",
   "pydub>=0.25.1,<0.26.0",
   "scipy>=1.13.1",
 ]

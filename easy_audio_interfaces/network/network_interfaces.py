@@ -52,7 +52,7 @@ class SocketServer(AudioSource):
         self._channels = channels
         self._port = port
         self._host = host
-        self.websocket: Optional[websockets.WebSocketServerProtocol] = None
+        self.websocket: Optional[websockets.ServerConnection] = None
         self._server = None
         self.post_process_bytes_fn = post_process_bytes_fn
         self._frame_queue: asyncio.Queue[AudioSegment] = asyncio.Queue(
@@ -70,7 +70,7 @@ class SocketServer(AudioSource):
     def channels(self) -> int:
         return self._channels
 
-    async def handle_client(self, websocket: websockets.WebSocketServerProtocol):
+    async def handle_client(self, websocket: websockets.ServerConnection):
         if self.websocket:
             logger.warning(
                 "Should only have one client per socket receiver. Check for logical error. Closing existing connection."
@@ -96,7 +96,7 @@ class SocketServer(AudioSource):
             await self.stop()
 
     async def _send_heartbeat(self):
-        while self.websocket and self.websocket.open:
+        while self.websocket and self.websocket.server.is_serving():
             try:
                 await self.websocket.send("heartbeat")
                 logger.debug("Heartbeat sent")
@@ -104,8 +104,8 @@ class SocketServer(AudioSource):
                 logger.warning("Failed to send heartbeat")
             await asyncio.sleep(5)  # Send heartbeat every 5 seconds
 
-    async def _handle_messages(self, websocket: websockets.WebSocketServerProtocol):
-        while self.websocket and self.websocket.open:
+    async def _handle_messages(self, websocket: websockets.ServerConnection):
+        while self.websocket and self.websocket.server.is_serving():
             try:
                 message = await websocket.recv()
                 if message == "heartbeat":
