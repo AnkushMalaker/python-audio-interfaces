@@ -44,3 +44,24 @@ resampled_stream = resampler.resample(rechunked_stream)
 await sink.write_from(resampled_stream)
 This pipeline receives audio from a socket, rechunks it, resamples it to 16kHz, and saves it to a local file.
 For more detailed usage and API documentation, please refer to the docstrings in the source code or the generated API documentation.
+
+# Essential Extras
+Based on the functinoality you require, you should consider installing with following extras:
+optional-dependencies = { stt = [
+  "faster-whisper",
+], silero-vad = [
+  "torch",
+  "torchaudio",
+], bluetooth = [
+  "bleak",
+], local-audio = [
+  "pyaudio",
+] }
+
+# Installing in your project
+You can install using uv:
+uv add "https://github.com/AnkushMalaker/python-audio-interfaces.git"
+
+or with extras, 
+
+uv add "https://github.com/AnkushMalaker/python-audio-interfaces.git[local-audio]"
