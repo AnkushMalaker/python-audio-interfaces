@@ -1,11 +1,13 @@
 import logging
+import wave
 from pathlib import Path
 from typing import AsyncGenerator, AsyncIterable, Iterable, Optional, Type
 
-from pydub import AudioSegment
+from wyoming.audio import AudioChunk
 
 from easy_audio_interfaces.base_interfaces import AudioSink, AudioSource
 from easy_audio_interfaces.types.common import PathLike
+from easy_audio_interfaces.utils import audio_chunk_from_file
 
 logger = logging.getLogger(__name__)
 
@@ -25,53 +27,85 @@ class LocalFileStreamer(AudioSource):
 
         self._chunk_size_ms = chunk_size_ms
         self._chunk_size_samples = chunk_size_samples
+        if not chunk_size_ms and not chunk_size_samples:
+            self._chunk_size_samples = 512
 
         self._file_path = Path(file_path)
-        self._audio_segment: Optional[AudioSegment] = None
+        self._audio_segment: Optional[AudioChunk] = None
 
     @property
     def sample_rate(self) -> int:
-        return self._audio_segment.frame_rate if self._audio_segment else 0
+        return self._audio_segment.rate if self._audio_segment else 0
 
     @property
     def channels(self) -> int:
         return self._audio_segment.channels if self._audio_segment else 0
 
     async def open(self):
-        self._audio_segment = AudioSegment.from_file(self._file_path)
+        # @optimization: Can convert this to an iterator maybe for better efficiency?
+        self._audio_segment = audio_chunk_from_file(self._file_path)
         if self._audio_segment is None:
             raise RuntimeError(f"Failed to open file: {self._file_path}")
         logger.info(
-            f"Opened file: {self._file_path}, Sample rate: {self._audio_segment.frame_rate}, Channels: {self._audio_segment.channels}"
+            f"Opened file: {self._file_path}, Sample rate: {self._audio_segment.rate}, Channels: {self._audio_segment.channels}"
         )
 
-    async def read(self) -> AudioSegment:
+    async def read(self) -> AudioChunk:
         if self._audio_segment is None:
             raise RuntimeError("File is not open. Call 'open()' first.")
 
-        if self._audio_segment.frame_count() == 0:
-            return AudioSegment.silent(duration=0)
+        if self._audio_segment.samples == 0:
+            raise StopAsyncIteration
 
         # If we're using millisecond-based chunks
         if self._chunk_size_ms is not None:
             assert self._audio_segment is not None
-            chunk = self._audio_segment[: self._chunk_size_ms]
-            self._audio_segment = self._audio_segment[self._chunk_size_ms :]  # type: ignore
-            return chunk  # type: ignore
+            chunk = self._audio_segment.audio[
+                : self._chunk_size_ms * self._audio_segment.width * self._audio_segment.channels
+            ]
+            self._audio_segment = AudioChunk(
+                audio=self._audio_segment.audio[
+                    self._chunk_size_ms * self._audio_segment.width * self._audio_segment.channels :
+                ],
+                rate=self._audio_segment.rate,
+                width=self._audio_segment.width,
+                channels=self._audio_segment.channels,
+            )
+            return AudioChunk(
+                audio=chunk,
+                rate=self._audio_segment.rate,
+                width=self._audio_segment.width,
+                channels=self._audio_segment.channels,
+            )
 
         # If we're using sample-based chunks
         if self._chunk_size_samples is not None:
             # Convert samples to milliseconds based on sample rate
             ms_per_chunk = (self._chunk_size_samples * 1000) // self.sample_rate
-            chunk = self._audio_segment[:ms_per_chunk]
-            self._audio_segment = self._audio_segment[ms_per_chunk:]  # type: ignore
-            return chunk  # type: ignore
+            chunk = self._audio_segment.audio[
+                : ms_per_chunk * self._audio_segment.width * self._audio_segment.channels
+            ]
+            self._audio_segment = AudioChunk(
+                audio=self._audio_segment.audio[
+                    ms_per_chunk * self._audio_segment.width * self._audio_segment.channels :
+                ],
+                rate=self._audio_segment.rate,
+                width=self._audio_segment.width,
+                channels=self._audio_segment.channels,
+            )
+            return AudioChunk(
+                audio=chunk,
+                rate=self._audio_segment.rate,
+                width=self._audio_segment.width,
+                channels=self._audio_segment.channels,
+            )
 
-        return AudioSegment.silent(duration=0)
+        raise RuntimeError(
+            "No chunk size provided. This shouldn't happen. We should default to 512 samples."
+        )
 
     async def close(self):
         if self._audio_segment:
-            self._audio_segment.export(self._file_path, format="wav")
             self._audio_segment = None
         logger.info(f"Closed file: {self._file_path}")
 
@@ -87,10 +121,10 @@ class LocalFileStreamer(AudioSource):
     ):
         await self.close()
 
-    async def iter_frames(self) -> AsyncGenerator[AudioSegment, None]:
+    async def iter_frames(self) -> AsyncGenerator[AudioChunk, None]:
         while True:
             frame = await self.read()
-            if frame.frame_count() == 0:
+            if frame.samples == 0:
                 break
             yield frame
 
@@ -107,7 +141,7 @@ class LocalFileSink(AudioSink):
         self._sample_rate = sample_rate
         self._channels = channels
         self._sample_width = sample_width
-        self._audio_segment: Optional[AudioSegment] = None
+        self._file_handle: Optional[wave.Wave_write] = None
 
     @property
     def sample_rate(self) -> int | float:
@@ -121,36 +155,37 @@ class LocalFileSink(AudioSink):
         logger.debug(f"Opening file for writing: {self._file_path}")
         if not self._file_path.parent.exists():
             raise RuntimeError(f"Parent directory does not exist: {self._file_path.parent}")
-        self._audio_segment = AudioSegment.silent(duration=0)
+
+        self._file_handle = wave.open(str(self._file_path), "wb")
         logger.info(f"Opened file for writing: {self._file_path}")
 
-    async def write(self, data: AudioSegment):
-        if self._audio_segment is None:
+    async def write(self, data: AudioChunk):
+        if self._file_handle is None:
             raise RuntimeError("File is not open. Call 'open()' first.")
-        self._audio_segment += data
-        logger.debug(f"Wrote {len(data)} bytes to {self._file_path}")
+        self._file_handle.writeframes(data.audio)
+        logger.debug(f"Wrote {len(data.audio)} bytes to {self._file_path}.")
 
-    async def write_from(self, input_stream: AsyncIterable[AudioSegment] | Iterable[AudioSegment]):
+    async def write_from(self, input_stream: AsyncIterable[AudioChunk] | Iterable[AudioChunk]):
         total_frames = 0
         total_bytes = 0
         if isinstance(input_stream, AsyncIterable):
             async for chunk in input_stream:
                 await self.write(chunk)
                 total_frames += 1
-                total_bytes += len(chunk)
+                total_bytes += len(chunk.audio)
         else:
             for chunk in input_stream:
                 await self.write(chunk)
                 total_frames += 1
-                total_bytes += len(chunk)
+                total_bytes += len(chunk.audio)
         logger.info(
             f"Finished writing {total_frames} frames ({total_bytes} bytes) to {self._file_path}"
         )
 
     async def close(self):
-        if self._audio_segment:
-            self._audio_segment.export(self._file_path, format="wav")
-            self._audio_segment = None
+        if self._file_handle:
+            self._file_handle.close()
+            self._file_handle = None
         logger.info(f"Closed file: {self._file_path}")
 
     async def __aenter__(self) -> "LocalFileSink":

@@ -5,8 +5,9 @@ from typing import Iterable
 
 import opuslib
 from bleak import BleakClient, BleakScanner
+from wyoming.audio import AudioChunk
 
-from easy_audio_interfaces import LocalFileSink, NumpyFrame
+from easy_audio_interfaces.filesystem.filesystem_interfaces import LocalFileSink
 
 # Device settings
 DEVICE_NAME = "Friend"
@@ -115,13 +116,19 @@ async def connect_to_device(device):
                 print("Listening for audio data...")
                 await asyncio.sleep(DURATION)
                 pcm_data = await frame_processor.decode_frames()
+                chunk = AudioChunk(
+                    audio=pcm_data,
+                    rate=SAMPLE_RATE,
+                    width=SAMPLE_WIDTH,
+                    channels=CHANNELS,
+                )
 
                 # Use LocalFileSink to save the audio data
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 audio_file = os.path.join(RECORD_DIR, f"audio_data_{timestamp}.wav")
 
                 async with LocalFileSink(audio_file, SAMPLE_RATE, CHANNELS, SAMPLE_WIDTH) as sink:
-                    await sink.write(NumpyFrame.frombuffer(pcm_data))
+                    await sink.write(chunk)
 
                 print(f"Audio data saved to {audio_file}")
 

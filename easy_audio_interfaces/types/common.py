@@ -1,8 +1,8 @@
 from pathlib import Path
 from typing import AsyncIterable, Union
 
-from pydub import AudioSegment
+from wyoming.audio import AudioChunk
 
-AudioStream = AsyncIterable[AudioSegment]
+AudioStream = AsyncIterable[AudioChunk]
 
 PathLike = Union[str, Path]

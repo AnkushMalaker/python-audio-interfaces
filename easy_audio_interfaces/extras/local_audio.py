@@ -1,9 +1,10 @@
 import asyncio
 import logging
+import time
 from typing import Optional, Type
 
 import pyaudio
-from pydub import AudioSegment
+from wyoming.audio import AudioChunk
 
 from easy_audio_interfaces.audio_interfaces import AudioSink, AudioSource
 
@@ -79,13 +80,17 @@ class InputMicStream(PyAudioInterface, AudioSource):
             logger.info("Input stream closed")
         self._stop_event.set()
 
-    async def read(self) -> AudioSegment:
+    async def read(self) -> AudioChunk:
         if self._stream is None:
             raise RuntimeError("Stream is not open. Call 'open()' first.")
 
         data = self._stream.read(self._chunk_size)
-        return AudioSegment(
-            data, sample_width=2, frame_rate=self._sample_rate, channels=self._channels
+        return AudioChunk(
+            audio=data,
+            rate=self._sample_rate,
+            width=2,
+            channels=self._channels,
+            timestamp=int(time.time()),
         )
 
     async def iter_frames(self):
@@ -148,10 +153,19 @@ class OutputSpeakerStream(PyAudioInterface, AudioSink):
             self._stream.close()
             logger.info("Output stream closed")
 
-    def write(self, frame: AudioSegment):
+    def _validate_chunk_parameters(self, frame: AudioChunk):
+        if frame.rate != self._sample_rate:
+            raise ValueError(f"Sample rate mismatch: {frame.rate} != {self._sample_rate}")
+        if frame.width != 2:
+            raise ValueError(f"Width mismatch: {frame.width} != 2")
+        if frame.channels != self._channels:
+            raise ValueError(f"Channels mismatch: {frame.channels} != {self._channels}")
+
+    def write(self, frame: AudioChunk):
+        self._validate_chunk_parameters(frame)
         if self._stream is None:
             raise RuntimeError("Stream is not open. Call 'open()' first.")
-        self._stream.write(frame.raw_data)  # type: ignore
+        self._stream.write(frame.audio)  # type: ignore
 
     async def __aenter__(self) -> "OutputSpeakerStream":
         await self.open()

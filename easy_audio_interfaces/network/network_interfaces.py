@@ -6,7 +6,7 @@ from collections.abc import Coroutine
 from typing import Any, AsyncGenerator, AsyncIterable, Callable, Optional, Type
 
 import websockets
-from pydub import AudioSegment
+from wyoming.audio import AudioChunk
 
 from easy_audio_interfaces.base_interfaces import AudioSink, AudioSource
 
@@ -25,16 +25,16 @@ class SocketServer(AudioSource):
         channels (int): The number of audio channels (default is 1).
         port (int): The port on which the WebSocket server listens (default is 8080).
         host (str): The host address for the WebSocket server (default is "localhost").
-        post_process_bytes_fn (Optional[Callable[[bytes], AudioSegment]]): A function to process
-            incoming byte data into a AudioSegment.
+        post_process_bytes_fn (Optional[Callable[[bytes], AudioChunk]]): A function to process
+            incoming byte data into a AudioChunk.
         server_routine (Optional[Coroutine[Any, Any, None]]): An optional coroutine that runs
             the server routine, defaults to a heartbeat function.
 
     Methods:
         handle_client(websocket): Handles incoming client connections and messages.
         open(): Starts the WebSocket server and waits for a client connection.
-        read() -> AudioSegment: Reads a frame from the frame queue.
-        iter_frames() -> AsyncGenerator[AudioSegment, None]: Asynchronously iterates over received frames.
+        read() -> AudioChunk: Reads a frame from the frame queue.
+        iter_frames() -> AsyncGenerator[AudioChunk, None]: Asynchronously iterates over received frames.
         stop(): Signals to stop the receiver.
         close(): Closes the WebSocket server and cleans up resources.
     """
@@ -45,7 +45,7 @@ class SocketServer(AudioSource):
         channels: int = 1,
         port: int = 8080,
         host: str = "localhost",
-        post_process_bytes_fn: Optional[Callable[[bytes], AudioSegment]] = None,
+        post_process_bytes_fn: Optional[Callable[[bytes], AudioChunk]] = None,
         server_routine: Optional[Coroutine[Any, Any, None]] = None,
     ):
         self._sample_rate = sample_rate
@@ -55,7 +55,7 @@ class SocketServer(AudioSource):
         self.websocket: Optional[websockets.ServerConnection] = None
         self._server = None
         self.post_process_bytes_fn = post_process_bytes_fn
-        self._frame_queue: asyncio.Queue[AudioSegment] = asyncio.Queue(
+        self._frame_queue: asyncio.Queue[AudioChunk] = asyncio.Queue(
             maxsize=1000
         )  # Adjust maxsize as needed
         self._stop_event = asyncio.Event()
@@ -116,10 +116,10 @@ class SocketServer(AudioSource):
                 if self.post_process_bytes_fn:
                     yield self.post_process_bytes_fn(message)  # type: ignore
                 else:
-                    yield AudioSegment(
-                        data=message,
-                        sample_width=2,
-                        frame_rate=self._sample_rate,
+                    yield AudioChunk(
+                        audio=message,
+                        width=2,
+                        rate=self._sample_rate,
                         channels=self._channels,
                     )
             except websockets.exceptions.ConnectionClosed:
@@ -136,12 +136,12 @@ class SocketServer(AudioSource):
             await asyncio.sleep(0.1)
         logger.debug("Client connected")
 
-    async def read(self) -> AudioSegment:
+    async def read(self) -> AudioChunk:
         frame = await self._frame_queue.get()
         logger.debug(f"Read frame of size: {len(frame)}")
         return frame
 
-    async def iter_frames(self) -> AsyncGenerator[AudioSegment, None]:
+    async def iter_frames(self) -> AsyncGenerator[AudioChunk, None]:
         while not self._stop_event.is_set():
             yield await self.read()
 
@@ -224,14 +224,14 @@ class SocketClient(AudioSink):
             await self.websocket.close()
             logger.info("Closed WebSocket streamer.")
 
-    async def write(self, data: AudioSegment):
+    async def write(self, data: AudioChunk):
         assert self.websocket is not None, "WebSocket is not connected."
         # Convert AudioSegment to bytes
         raw_data = data.raw_data
         await self.websocket.send(raw_data)  # type: ignore
         logger.debug(f"Sent {len(raw_data)} bytes to {self.websocket.remote_address}")  # type: ignore
 
-    async def write_from(self, input_stream: AsyncIterable[AudioSegment]):
+    async def write_from(self, input_stream: AsyncIterable[AudioChunk]):
         async for chunk in input_stream:
             await self.write(chunk)
 
