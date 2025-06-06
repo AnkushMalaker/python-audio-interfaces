@@ -157,6 +157,9 @@ class LocalFileSink(AudioSink):
             raise RuntimeError(f"Parent directory does not exist: {self._file_path.parent}")
 
         self._file_handle = wave.open(str(self._file_path), "wb")
+        self._file_handle.setnchannels(self._channels)
+        self._file_handle.setsampwidth(self._sample_width)
+        self._file_handle.setframerate(self._sample_rate)
         logger.info(f"Opened file for writing: {self._file_path}")
 
     async def write(self, data: AudioChunk):
