@@ -60,13 +60,15 @@ class LocalFileStreamer(AudioSource):
         # If we're using millisecond-based chunks
         if self._chunk_size_ms is not None:
             assert self._audio_segment is not None
-            chunk = self._audio_segment.audio[
-                : self._chunk_size_ms * self._audio_segment.width * self._audio_segment.channels
-            ]
+            # Calculate bytes per millisecond
+            bytes_per_ms = (
+                self._audio_segment.rate * self._audio_segment.width * self._audio_segment.channels
+            ) // 1000
+            chunk_size_bytes = self._chunk_size_ms * bytes_per_ms
+
+            chunk = self._audio_segment.audio[:chunk_size_bytes]
             self._audio_segment = AudioChunk(
-                audio=self._audio_segment.audio[
-                    self._chunk_size_ms * self._audio_segment.width * self._audio_segment.channels :
-                ],
+                audio=self._audio_segment.audio[chunk_size_bytes:],
                 rate=self._audio_segment.rate,
                 width=self._audio_segment.width,
                 channels=self._audio_segment.channels,
@@ -80,15 +82,14 @@ class LocalFileStreamer(AudioSource):
 
         # If we're using sample-based chunks
         if self._chunk_size_samples is not None:
-            # Convert samples to milliseconds based on sample rate
-            ms_per_chunk = (self._chunk_size_samples * 1000) // self.sample_rate
-            chunk = self._audio_segment.audio[
-                : ms_per_chunk * self._audio_segment.width * self._audio_segment.channels
-            ]
+            # Calculate bytes for the number of samples
+            chunk_size_bytes = (
+                self._chunk_size_samples * self._audio_segment.width * self._audio_segment.channels
+            )
+
+            chunk = self._audio_segment.audio[:chunk_size_bytes]
             self._audio_segment = AudioChunk(
-                audio=self._audio_segment.audio[
-                    ms_per_chunk * self._audio_segment.width * self._audio_segment.channels :
-                ],
+                audio=self._audio_segment.audio[chunk_size_bytes:],
                 rate=self._audio_segment.rate,
                 width=self._audio_segment.width,
                 channels=self._audio_segment.channels,
@@ -123,10 +124,12 @@ class LocalFileStreamer(AudioSource):
 
     async def iter_frames(self) -> AsyncGenerator[AudioChunk, None]:
         while True:
-            frame = await self.read()
-            if frame.samples == 0:
+            try:
+                frame = await self.read()
+                # Do we need to check for frame.samples == 0?
+                yield frame
+            except StopAsyncIteration:
                 break
-            yield frame
 
 
 class LocalFileSink(AudioSink):
