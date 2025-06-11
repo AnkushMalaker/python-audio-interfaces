@@ -59,7 +59,7 @@ class SocketServer(AudioSource):
             maxsize=1000
         )  # Adjust maxsize as needed
         self._stop_event = asyncio.Event()
-        self._server_routine = server_routine or self._send_heartbeat()
+        self._server_routine = server_routine
         self._server_task: Optional[Task[Any | None]] = None
 
     @property
@@ -80,7 +80,10 @@ class SocketServer(AudioSource):
 
         logger.info(f"Accepted connection from {websocket.remote_address}")
 
-        self._server_task = asyncio.create_task(self._server_routine)
+        if self._server_routine:
+            self._server_task = asyncio.create_task(self._server_routine)
+        else:
+            self._server_task = asyncio.create_task(self._send_heartbeat())
 
         await websocket.send("ack")
 
@@ -116,8 +119,16 @@ class SocketServer(AudioSource):
                 if self.post_process_bytes_fn:
                     yield self.post_process_bytes_fn(message)  # type: ignore
                 else:
+                    # Convert message to bytes if needed
+                    if isinstance(message, bytes):
+                        audio_bytes = message
+                    elif isinstance(message, str):
+                        audio_bytes = message.encode()
+                    else:
+                        audio_bytes = bytes(message)
+
                     yield AudioChunk(
-                        audio=message,
+                        audio=audio_bytes,
                         width=2,
                         rate=self._sample_rate,
                         channels=self._channels,
@@ -130,15 +141,11 @@ class SocketServer(AudioSource):
         logger.debug(f"Starting WebSocket server on {self._host}:{self._port}")
         self._server = await websockets.serve(self.handle_client, self._host, self._port)
         logger.info(f"WebSocket server listening on ws://{self._host}:{self._port}")
-        logger.debug("Waiting for a client connection...")
-        while self.websocket is None:
-            logger.debug("Waiting for a client connection...")
-            await asyncio.sleep(0.1)
-        logger.debug("Client connected")
+        # Server is ready, don't wait for client connection here
 
     async def read(self) -> AudioChunk:
         frame = await self._frame_queue.get()
-        logger.debug(f"Read frame of size: {len(frame)}")
+        logger.debug(f"Read frame of size: {frame.samples}")
         return frame
 
     async def iter_frames(self) -> AsyncGenerator[AudioChunk, None]:
@@ -227,7 +234,7 @@ class SocketClient(AudioSink):
     async def write(self, data: AudioChunk):
         assert self.websocket is not None, "WebSocket is not connected."
         # Convert AudioSegment to bytes
-        raw_data = data.raw_data
+        raw_data = data.audio
         await self.websocket.send(raw_data)  # type: ignore
         logger.debug(f"Sent {len(raw_data)} bytes to {self.websocket.remote_address}")  # type: ignore
 
