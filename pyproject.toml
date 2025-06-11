@@ -8,16 +8,14 @@ authors = [
   { name = "Ankush Malaker", email = "43288948+AnkushMalaker@users.noreply.github.com" },
 ]
 dependencies = [
-  # "pyaudio>=0.2.13,<0.3.0",
   "samplerate>=0.1.0,<0.2.0",
-  "types-pyaudio>=0.2.16.5,<0.3.0",
   "fire>=0.5.0,<0.6.0",
   "rich>=13.5.3,<14.0.0",
   "opuslib>=3.0.1,<4.0.0",
   "websockets>=14.0",
-  "pydub>=0.25.1,<0.26.0",
   "scipy>=1.13.1",
   "wyoming>=1.6.1",
+  "soxr>=0.5.0.post1",
 ]
 optional-dependencies = { stt = [
   "faster-whisper",
@@ -28,6 +26,9 @@ optional-dependencies = { stt = [
   "bleak",
 ], local-audio = [
   "pyaudio",
+], test = [
+  "pytest",
+  "pytest-asyncio",
 ] }
 
 # [project.scripts]
@@ -73,7 +74,6 @@ module = [
   "samplerate.*",
   "fire.*",
   "scipy.*",
-  "pydub.*",
   "torchaudio.*",
   "opuslib.*",
 ]
