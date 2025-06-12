@@ -1,6 +1,6 @@
 [project]
 name = "easy-audio-interfaces"
-version = "0.2.3"
+version = "0.2.5"
 description = ""
 readme = "README.md"
 requires-python = ">=3.9,<3.13"
@@ -8,7 +8,6 @@ authors = [
   { name = "Ankush Malaker", email = "43288948+AnkushMalaker@users.noreply.github.com" },
 ]
 dependencies = [
-  "samplerate>=0.1.0,<0.2.0",
   "fire>=0.5.0,<0.6.0",
   "rich>=13.5.3,<14.0.0",
   "opuslib>=3.0.1,<4.0.0",
@@ -31,15 +30,11 @@ optional-dependencies = { stt = [
   "pytest-asyncio",
 ] }
 
-# [project.scripts]
-# Define any CLI scripts here if needed
 
 [build-system]
 requires = ["setuptools", "wheel"]
 build-backend = "setuptools.build_meta"
 
-# [tool.uv]
-# uv-specific configurations can be added here
 
 [tool.setuptools]
 platforms = ["any"]
@@ -58,7 +53,6 @@ exclude = '''
 (
   .venv
   | .git
-  | lightning_logs
   | multirun
 )
 '''
@@ -76,5 +70,6 @@ module = [
   "scipy.*",
   "torchaudio.*",
   "opuslib.*",
+  "soxr.*",
 ]
 ignore_missing_imports = true

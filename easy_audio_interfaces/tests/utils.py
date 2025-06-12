@@ -3,6 +3,7 @@ import math
 import struct
 from typing import AsyncGenerator
 
+import numpy as np
 from wyoming.audio import AudioChunk
 
 
@@ -20,10 +21,18 @@ def create_sine_wave_audio_chunk(
     for i in range(num_samples):
         # Generate sine wave sample
         t = i / sample_rate
-        sample = int(32767 * math.sin(2 * math.pi * frequency * t))
 
-        # Pack as 16-bit signed integer (width=2)
-        sample_bytes = struct.pack("<h", sample)
+        if width == 1:  # 8-bit
+            sample_int = int(np.iinfo(np.int8).max * math.sin(2 * math.pi * frequency * t))
+            sample_bytes = struct.pack("<b", sample_int)
+        elif width == 2:  # 16-bit
+            sample_int = int(np.iinfo(np.int16).max * math.sin(2 * math.pi * frequency * t))
+            sample_bytes = struct.pack("<h", sample_int)
+        elif width == 4:  # 32-bit (treated as float32)
+            sample_float = math.sin(2 * math.pi * frequency * t)  # Already normalized [-1, 1]
+            sample_bytes = struct.pack("<f", sample_float)
+        else:
+            raise ValueError(f"Unsupported width: {width}")
 
         # For stereo, duplicate the sample
         for _ in range(channels):
