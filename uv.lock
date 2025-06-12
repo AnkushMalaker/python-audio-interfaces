@@ -259,7 +259,7 @@ wheels = [
 
 [[package]]
 name = "easy-audio-interfaces"
-version = "0.2.4"
+version = "0.2.5"
 source = { editable = "." }
 dependencies = [
     { name = "fire" },
