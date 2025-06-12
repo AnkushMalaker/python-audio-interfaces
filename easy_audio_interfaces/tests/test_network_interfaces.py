@@ -161,12 +161,11 @@ async def test_socket_heartbeat():
 @pytest.mark.asyncio
 async def test_socket_error_handling():
     """Test error handling in SocketServer and SocketClient"""
-    invalid_port = 123456  # Invalid port number
     test_port = BASE_TEST_PORT + 5
 
-    # Test invalid receiver port
+    # Test invalid receiver port - use a negative port which should always fail
     with pytest.raises(OSError):
-        async with SocketServer(port=invalid_port) as receiver:
+        async with SocketServer(port=-1) as receiver:
             pass
 
     # Test connection to non-existent receiver
