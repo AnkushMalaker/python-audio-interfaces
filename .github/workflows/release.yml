@@ -49,4 +49,4 @@ jobs:
 
       - name: Publish to PyPI
         # With Trusted Publishing no token is required
-        run: uv publish --skip-existing
+        run: uv publish --check-url https://pypi.org/project/easy-audio-interfaces/ 
