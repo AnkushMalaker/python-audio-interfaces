@@ -1,0 +1,52 @@
+name: Build & Publish (uv)
+
+# Fires when the merge-commit of any PR lands on main
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read       # checkout
+  id-token:  write     # required for PyPI trusted publishing
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Fast binary install of uv
+      - uses: astral-sh/setup-uv@v6        # :contentReference[oaicite:0]{index=0}
+        with:
+          version: latest                  # pin if you want reproducibility
+
+      # GitHub’s cached CPython is usually quicker than uv downloading
+      - uses: actions/setup-python@v5
+        with:
+          python-version-file: pyproject.toml   # uses your requires-python
+
+      - name: Install dev deps
+        run: uv sync --locked --all-extras --dev
+
+      - name: Run tests
+        run: uv run pytest -q
+
+
+  publish:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'       # safety net
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-python@v5
+        with:
+          python-version-file: pyproject.toml
+
+      - name: Build sdists & wheels
+        # --no-sources = verify nothing is fetched at build time :contentReference[oaicite:1]{index=1}
+        run: uv build --sdist --wheel --no-sources
+
+      - name: Publish to PyPI
+        # With Trusted Publishing no token is required
+        run: uv publish --skip-existing
