@@ -77,6 +77,18 @@ class ProcessingBlock(Protocol):
 
     def process(self, input_stream: AudioStream) -> AudioStream: ...
 
+    async def process_chunk(self, chunk: AudioChunk) -> AsyncIterator[AudioChunk]:
+        """Convenience method for processing a single AudioChunk.
+        
+        Default implementation falls back to .process() method.
+        Blocks that care about performance can override this with a real fast-path.
+        """
+        async def _single() -> AsyncIterator[AudioChunk]:
+            yield chunk
+        
+        async for out in self.process(_single()):
+            yield out
+
     async def open(self): ...
 
     async def close(self): ...

@@ -263,3 +263,126 @@ async def test_resampling_block_extreme_ratios():
 
     assert len(output_chunks) > 0
     assert all(chunk.rate == 8000 for chunk in output_chunks)
+
+
+# New tests for process_chunk functionality
+@pytest.mark.asyncio
+async def test_resampling_block_process_chunk():
+    """Test the new process_chunk method with ResamplingBlock."""
+    duration_ms = 100
+    input_rate = 16000
+    output_rate = 48000
+    audio_chunk = create_sine_wave_audio_chunk(duration_ms, SINE_FREQUENCY, input_rate)
+
+    resampler = ResamplingBlock(resample_rate=output_rate)
+    await resampler.open()
+
+    # Test process_chunk method
+    output_chunks = []
+    async for output_chunk in resampler.process_chunk(audio_chunk):
+        output_chunks.append(output_chunk)
+
+    await resampler.close()
+
+    # Verify results
+    assert len(output_chunks) > 0
+    for chunk in output_chunks:
+        assert chunk.rate == output_rate
+        assert chunk.width == audio_chunk.width
+        assert chunk.channels == audio_chunk.channels
+
+    # Check that total samples are approximately correct
+    total_output_samples = sum(chunk.samples for chunk in output_chunks)
+    expected_samples = int(audio_chunk.samples * output_rate / input_rate)
+    assert abs(total_output_samples - expected_samples) <= 10
+
+
+@pytest.mark.asyncio
+async def test_resampling_block_process_chunk_stereo():
+    """Test process_chunk with stereo audio."""
+    duration_ms = 100
+    input_rate = 44100
+    output_rate = 48000
+    channels = 2
+    audio_chunk = create_sine_wave_audio_chunk(
+        duration_ms, SINE_FREQUENCY, input_rate, channels=channels
+    )
+
+    resampler = ResamplingBlock(resample_rate=output_rate)
+    await resampler.open()
+
+    output_chunks = []
+    async for output_chunk in resampler.process_chunk(audio_chunk):
+        output_chunks.append(output_chunk)
+
+    await resampler.close()
+
+    # Verify stereo is preserved
+    assert len(output_chunks) > 0
+    for chunk in output_chunks:
+        assert chunk.rate == output_rate
+        assert chunk.channels == channels
+        assert chunk.width == audio_chunk.width
+
+
+@pytest.mark.asyncio
+async def test_rechunking_block_process_chunk():
+    """Test the new process_chunk method with RechunkingBlock."""
+    duration_ms = 200  # 200ms of audio
+    sample_rate = 48000
+    chunk_size_ms = 50  # Split into 50ms chunks
+    audio_chunk = create_sine_wave_audio_chunk(duration_ms, SINE_FREQUENCY, sample_rate)
+
+    rechunker = RechunkingBlock(chunk_size_ms=chunk_size_ms)
+    await rechunker.open()
+
+    # Test process_chunk method
+    output_chunks = []
+    async for output_chunk in rechunker.process_chunk(audio_chunk):
+        output_chunks.append(output_chunk)
+
+    await rechunker.close()
+
+    # Should produce 4 chunks of 50ms each
+    assert len(output_chunks) == 4
+    for chunk in output_chunks:
+        assert chunk.rate == sample_rate
+        assert chunk.width == audio_chunk.width
+        assert chunk.channels == audio_chunk.channels
+        # Each chunk should be approximately 50ms
+        chunk_duration_ms = chunk.samples / chunk.rate * 1000
+        assert abs(chunk_duration_ms - chunk_size_ms) < 5  # Allow small tolerance
+
+
+@pytest.mark.asyncio
+async def test_process_chunk_vs_process_consistency():
+    """Test that process_chunk produces the same results as process for single chunks."""
+    duration_ms = 100
+    input_rate = 22050
+    output_rate = 44100
+    audio_chunk = create_sine_wave_audio_chunk(duration_ms, SINE_FREQUENCY, input_rate)
+
+    resampler = ResamplingBlock(resample_rate=output_rate)
+    await resampler.open()
+
+    # Test process_chunk
+    process_chunk_results = []
+    async for output_chunk in resampler.process_chunk(audio_chunk):
+        process_chunk_results.append(output_chunk)
+
+    # Test process with single-item generator
+    process_results = []
+    async for output_chunk in resampler.process(async_generator(audio_chunk)):
+        process_results.append(output_chunk)
+
+    await resampler.close()
+
+    # Results should be identical
+    assert len(process_chunk_results) == len(process_results)
+    for chunk1, chunk2 in zip(process_chunk_results, process_results):
+        assert chunk1.rate == chunk2.rate
+        assert chunk1.width == chunk2.width
+        assert chunk1.channels == chunk2.channels
+        assert len(chunk1.audio) == len(chunk2.audio)
+        # Audio data should be identical (or very close due to floating point)
+        assert chunk1.audio == chunk2.audio
