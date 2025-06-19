@@ -209,16 +209,16 @@ async def test_resampling_block_8bit_audio():
 
 
 @pytest.mark.asyncio
-async def test_resampling_block_32bit_float():
-    """Test resampling with 32-bit float audio."""
+async def test_resampling_block_32bit_int():
+    """Test resampling with 32-bit int audio."""
     duration_ms = 500
     input_rate = 44100
     output_rate = 48000
 
-    # Create a simple float32 audio chunk
+    # Create a simple int32 audio chunk
     num_samples = int(input_rate * duration_ms / 1000)
     samples = np.sin(2 * np.pi * SINE_FREQUENCY * np.arange(num_samples) / input_rate)
-    audio_data = samples.astype(np.float32).tobytes()
+    audio_data = (samples * np.iinfo(np.int32).max).astype(np.int32).tobytes()
 
     audio_chunk = AudioChunk(
         audio=audio_data, rate=input_rate, width=4, channels=1  # 32-bit = 4 bytes

@@ -46,7 +46,7 @@ class ResamplingBlock(ProcessingBlock):
         elif chunk.width == 2:
             dtype = np.int16
         elif chunk.width == 4:
-            dtype = np.float32
+            dtype = np.int32
         else:
             raise ValueError(f"Unsupported audio width: {chunk.width}")
 
@@ -70,7 +70,7 @@ class ResamplingBlock(ProcessingBlock):
         elif width == 2:
             dtype = np.int16
         elif width == 4:
-            dtype = np.float32
+            dtype = np.int32
         else:
             raise ValueError(f"Unsupported audio width: {width}")
 
@@ -103,7 +103,7 @@ class ResamplingBlock(ProcessingBlock):
             elif chunk.width == 2:
                 audio_float = audio_array.astype(np.float32) / np.iinfo(np.int16).max
             elif chunk.width == 4:
-                audio_float = audio_array  # Already float32, no conversion needed
+                audio_float = audio_array.astype(np.float32) / np.iinfo(np.int32).max
 
             # Resample using soxr (handles both mono and multi-channel audio)
             resampled = soxr.resample(
@@ -116,7 +116,7 @@ class ResamplingBlock(ProcessingBlock):
             elif chunk.width == 2:
                 resampled_int = (resampled * np.iinfo(np.int16).max).astype(np.int16)
             elif chunk.width == 4:
-                resampled_int = resampled.astype(np.float32)  # Keep as float32
+                resampled_int = (resampled * np.iinfo(np.int32).max).astype(np.int32)
 
             # Create new AudioChunk with resampled data
             resampled_chunk = self._numpy_to_audio_chunk(

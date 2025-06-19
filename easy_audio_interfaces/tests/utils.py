@@ -28,9 +28,9 @@ def create_sine_wave_audio_chunk(
         elif width == 2:  # 16-bit
             sample_int = int(np.iinfo(np.int16).max * math.sin(2 * math.pi * frequency * t))
             sample_bytes = struct.pack("<h", sample_int)
-        elif width == 4:  # 32-bit (treated as float32)
-            sample_float = math.sin(2 * math.pi * frequency * t)  # Already normalized [-1, 1]
-            sample_bytes = struct.pack("<f", sample_float)
+        elif width == 4:  # 32-bit (treated as int32)
+            sample_int = int(np.iinfo(np.int32).max * math.sin(2 * math.pi * frequency * t))
+            sample_bytes = struct.pack("<i", sample_int)
         else:
             raise ValueError(f"Unsupported width: {width}")
 
