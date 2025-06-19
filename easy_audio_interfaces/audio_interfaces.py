@@ -30,9 +30,13 @@ class ResamplingBlock(ProcessingBlock):
     def __init__(
         self,
         resample_rate: int,
+        resample_channels: int | None = None,
+        resample_width: int | None = None,
         quality: str = "HQ",  # HQ, VHQ, MQ, LQ, or QQ
     ):
         self._resample_rate = resample_rate
+        self._resample_channels = resample_channels
+        self._resample_width = resample_width
         self._quality = quality
 
     @property
@@ -90,39 +94,71 @@ class ResamplingBlock(ProcessingBlock):
         )
 
     async def process(self, input_stream: AudioStream) -> AudioStream:
+
         async for chunk in input_stream:
-            if chunk.rate == self._resample_rate:
-                # No resampling needed
+            # Check if any conversion is needed
+            if self._resample_channels is None:
+                self._resample_channels = chunk.channels
+            if self._resample_width is None:
+                self._resample_width = chunk.width
+
+            if (
+                chunk.rate == self._resample_rate
+                and chunk.channels == self._resample_channels
+                and chunk.width == self._resample_width
+            ):
+                # No conversion needed
                 yield chunk
                 continue
 
             # Convert to numpy array
             audio_array = self._audio_chunk_to_numpy(chunk)
 
-            # Convert to float for processing
+            # Convert to float for processing (normalize to [-1.0, 1.0])
             if chunk.width == 1:
                 audio_float = audio_array.astype(np.float32) / np.iinfo(np.int8).max
             elif chunk.width == 2:
                 audio_float = audio_array.astype(np.float32) / np.iinfo(np.int16).max
             elif chunk.width == 4:
                 audio_float = audio_array.astype(np.float32) / np.iinfo(np.int32).max
+            else:
+                raise ValueError(f"Unsupported input audio width: {chunk.width}")
 
-            # Resample using soxr (handles both mono and multi-channel audio)
-            resampled = soxr.resample(
-                audio_float, chunk.rate, self._resample_rate, quality=self._quality
-            )
+            # Handle channel conversion
+            if chunk.channels != self._resample_channels:
+                if chunk.channels == 2 and self._resample_channels == 1:
+                    # Convert stereo to mono by averaging channels
+                    if audio_float.ndim == 2:
+                        audio_float = np.mean(audio_float, axis=1)
+                elif chunk.channels == 1 and self._resample_channels == 2:
+                    # Convert mono to stereo by duplicating channel
+                    audio_float = np.column_stack([audio_float, audio_float])
+                else:
+                    logger.warning(
+                        f"Unsupported channel conversion: {chunk.channels} -> {self._resample_channels}"
+                    )
 
-            # Convert back to original format
-            if chunk.width == 1:
+            # Resample if needed (handles both mono and multi-channel audio)
+            if chunk.rate != self._resample_rate:
+                resampled = soxr.resample(
+                    audio_float, chunk.rate, self._resample_rate, quality=self._quality
+                )
+            else:
+                resampled = audio_float
+
+            # Convert back to target format (scale from [-1.0, 1.0] to target bit depth)
+            if self._resample_width == 1:
                 resampled_int = (resampled * np.iinfo(np.int8).max).astype(np.int8)
-            elif chunk.width == 2:
+            elif self._resample_width == 2:
                 resampled_int = (resampled * np.iinfo(np.int16).max).astype(np.int16)
-            elif chunk.width == 4:
+            elif self._resample_width == 4:
                 resampled_int = (resampled * np.iinfo(np.int32).max).astype(np.int32)
+            else:
+                raise ValueError(f"Unsupported target audio width: {self._resample_width}")
 
             # Create new AudioChunk with resampled data
             resampled_chunk = self._numpy_to_audio_chunk(
-                resampled_int, self._resample_rate, chunk.width, chunk.channels
+                resampled_int, self._resample_rate, self._resample_width, self._resample_channels
             )
 
             yield resampled_chunk
