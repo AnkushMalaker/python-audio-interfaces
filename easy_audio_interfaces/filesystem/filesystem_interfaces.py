@@ -5,7 +5,7 @@ from typing import AsyncGenerator, AsyncIterable, Iterable, Optional, Type
 
 from wyoming.audio import AudioChunk
 
-from easy_audio_interfaces.base_interfaces import AudioSink, AudioSource
+from easy_audio_interfaces.base_interfaces import AudioSource, BaseAudioSink
 from easy_audio_interfaces.types.common import PathLike
 from easy_audio_interfaces.utils import audio_chunk_from_file
 
@@ -132,7 +132,7 @@ class LocalFileStreamer(AudioSource):
                 break
 
 
-class LocalFileSink(AudioSink):
+class LocalFileSink(BaseAudioSink):
     def __init__(
         self,
         file_path: PathLike,
@@ -154,6 +154,10 @@ class LocalFileSink(AudioSink):
     def channels(self) -> int:
         return self._channels
 
+    @property
+    def sample_width(self) -> int:
+        return self._sample_width
+
     async def open(self):
         logger.debug(f"Opening file for writing: {self._file_path}")
         if not self._file_path.parent.exists():
@@ -165,7 +169,8 @@ class LocalFileSink(AudioSink):
         self._file_handle.setframerate(self._sample_rate)
         logger.info(f"Opened file for writing: {self._file_path}")
 
-    async def write(self, data: AudioChunk):
+    async def _write_impl(self, data: AudioChunk):
+        """Implementation-specific write logic called after validation."""
         if self._file_handle is None:
             raise RuntimeError("File is not open. Call 'open()' first.")
         self._file_handle.writeframes(data.audio)

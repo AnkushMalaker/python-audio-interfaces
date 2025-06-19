@@ -6,7 +6,8 @@ from typing import Optional, Type
 import pyaudio
 from wyoming.audio import AudioChunk
 
-from easy_audio_interfaces.audio_interfaces import AudioSink, AudioSource
+from easy_audio_interfaces.audio_interfaces import AudioSource
+from easy_audio_interfaces.base_interfaces import BaseAudioSink
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +112,7 @@ class InputMicStream(PyAudioInterface, AudioSource):
         await self.close()
 
 
-class OutputSpeakerStream(PyAudioInterface, AudioSink):
+class OutputSpeakerStream(PyAudioInterface, BaseAudioSink):
     def __init__(
         self,
         sample_rate: int = 16000,
@@ -134,6 +135,10 @@ class OutputSpeakerStream(PyAudioInterface, AudioSink):
     def channels(self) -> int:
         return self._channels
 
+    @property
+    def sample_width(self) -> int:
+        return 2  # PyAudio uses 16-bit (2 bytes) format
+
     async def open(self):
         device_info = self.get_output_device_info(self._device_index)
         logger.info(f"Opening output stream on device: {device_info['name']}")
@@ -153,16 +158,7 @@ class OutputSpeakerStream(PyAudioInterface, AudioSink):
             self._stream.close()
             logger.info("Output stream closed")
 
-    def _validate_chunk_parameters(self, frame: AudioChunk):
-        if frame.rate != self._sample_rate:
-            raise ValueError(f"Sample rate mismatch: {frame.rate} != {self._sample_rate}")
-        if frame.width != 2:
-            raise ValueError(f"Width mismatch: {frame.width} != 2")
-        if frame.channels != self._channels:
-            raise ValueError(f"Channels mismatch: {frame.channels} != {self._channels}")
-
-    def write(self, frame: AudioChunk):
-        self._validate_chunk_parameters(frame)
+    async def _write_impl(self, frame: AudioChunk):
         if self._stream is None:
             raise RuntimeError("Stream is not open. Call 'open()' first.")
         self._stream.write(frame.audio)  # type: ignore
@@ -179,11 +175,11 @@ class OutputSpeakerStream(PyAudioInterface, AudioSink):
     ):
         await self.close()
 
-    async def write_from(self, audio_source: AudioSource):
+    async def write_from(self, input_stream):
         async def _write_from():
             try:
-                async for frame in audio_source:
-                    self.write(frame)
+                async for frame in input_stream:
+                    await self.write(frame)
             except asyncio.CancelledError:
                 logger.info("write_from task cancelled")
 
@@ -204,9 +200,9 @@ async def main():
 
         # or even more simply:
         async for frame in mic:
-            frame = frame + 5  # Do some processing
-            print(frame.dBFS)
-            speaker.write(frame)
+            # Do some processing - just log the frame info
+            print(f"Frame samples: {frame.samples}")
+            await speaker.write(frame)
 
 
 if __name__ == "__main__":

@@ -8,7 +8,7 @@ from typing import Any, AsyncGenerator, AsyncIterable, Callable, Optional, Type
 import websockets
 from wyoming.audio import AudioChunk
 
-from easy_audio_interfaces.base_interfaces import AudioSink, AudioSource
+from easy_audio_interfaces.base_interfaces import AudioSource, BaseAudioSink
 
 logger = logging.getLogger(__name__)
 
@@ -179,7 +179,7 @@ class SocketServer(AudioSource):
             yield frame
 
 
-class SocketClient(AudioSink):
+class SocketClient(BaseAudioSink):
     """
     A class that represents a WebSocket audio sink streamer.
 
@@ -206,11 +206,13 @@ class SocketClient(AudioSink):
         channels: int = 1,
         port: int = 8080,
         host: str = "localhost",
+        sample_width: int = 2,  # Default to 16-bit audio
     ):
         self._sample_rate = sample_rate
         self._channels = channels
         self._port = port
         self._host = host
+        self._sample_width = sample_width
         self.websocket = None
 
     @property
@@ -220,6 +222,10 @@ class SocketClient(AudioSink):
     @property
     def channels(self) -> int:
         return self._channels
+
+    @property
+    def sample_width(self) -> int:
+        return self._sample_width
 
     async def open(self):
         uri = f"ws://{self._host}:{self._port}"
@@ -231,7 +237,7 @@ class SocketClient(AudioSink):
             await self.websocket.close()
             logger.info("Closed WebSocket streamer.")
 
-    async def write(self, data: AudioChunk):
+    async def _write_impl(self, data: AudioChunk):
         assert self.websocket is not None, "WebSocket is not connected."
         # Convert AudioSegment to bytes
         raw_data = data.audio
@@ -240,7 +246,7 @@ class SocketClient(AudioSink):
 
     async def write_from(self, input_stream: AsyncIterable[AudioChunk]):
         async for chunk in input_stream:
-            await self.write(chunk)
+            await self.write(chunk)  # This will automatically validate via base class
 
     async def __aiter__(self):
         yield

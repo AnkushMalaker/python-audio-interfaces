@@ -98,3 +98,7 @@ python -m easy_audio_interfaces.examples.file_network_transfer receiver output_f
 ```
 
 For more detailed usage and API documentation, please refer to the docstrings in the source code.
+
+Type annotations use AudioSinkProtocol (preserves duck typing)
+Implementations can inherit from BaseAudioSink (gets validation for free)
+Third-party code can still implement the protocol without inheritance
