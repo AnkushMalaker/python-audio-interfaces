@@ -33,18 +33,14 @@ class ResamplingBlock(ProcessingBlock):
         resample_channels: int | None = None,
         resample_width: int | None = None,
         quality: str = "HQ",  # HQ, VHQ, MQ, LQ, or QQ
-        target_samples_per_chunk: int | None = None,  # For consistent chunking
     ):
         self._resample_rate = resample_rate
         self._resample_channels = resample_channels
         self._resample_width = resample_width
         self._quality = quality
-        self._target_samples_per_chunk = target_samples_per_chunk
 
-        # Buffering for maintaining consistent sample counts
-        self._buffer = np.array([])
-        self._buffered_samples = 0
-        self._output_format_set = False
+        # Flag to track if we've initialized from first chunk
+        self._initialized = False
 
     @property
     def sample_rate(self) -> int:
@@ -100,67 +96,27 @@ class ResamplingBlock(ProcessingBlock):
             channels=channels,
         )
 
-    def _get_target_samples_per_chunk(self, input_chunk: AudioChunk) -> int:
-        """Determine target samples per chunk for consistent output."""
-        if self._target_samples_per_chunk is not None:
-            return self._target_samples_per_chunk
+    def _initialize_from_first_chunk(self, chunk: AudioChunk):
+        """Initialize unspecified parameters from the first chunk."""
+        if not self._initialized:
+            if self._resample_channels is None:
+                self._resample_channels = chunk.channels
+                logger.info(f"Inferred resample_channels from input: {self._resample_channels}")
 
-        # AudioChunk.samples already represents temporal samples
-        input_temporal_samples = input_chunk.samples
+            if self._resample_width is None:
+                self._resample_width = chunk.width
+                logger.info(f"Inferred resample_width from input: {self._resample_width}")
 
-        # If rate conversion is happening, adjust target samples
-        if input_chunk.rate != self._resample_rate:
-            target_temporal_samples = int(
-                input_temporal_samples * self._resample_rate / input_chunk.rate
-            )
-        else:
-            target_temporal_samples = input_temporal_samples
-
-        return target_temporal_samples
-
-    def _add_to_buffer(self, audio_data: np.ndarray):
-        """Add audio data to internal buffer."""
-        if self._buffer.size == 0:
-            self._buffer = audio_data
-        else:
-            if audio_data.ndim == self._buffer.ndim:
-                self._buffer = np.concatenate([self._buffer, audio_data])
-            else:
-                # Handle dimension mismatch (mono vs stereo)
-                if self._buffer.ndim == 1 and audio_data.ndim == 2:
-                    self._buffer = self._buffer.reshape(-1, 1)
-                elif self._buffer.ndim == 2 and audio_data.ndim == 1:
-                    audio_data = audio_data.reshape(-1, 1)
-                self._buffer = np.concatenate([self._buffer, audio_data])
-
-    def _extract_from_buffer(self, target_samples: int) -> np.ndarray | None:
-        """Extract target number of samples from buffer."""
-        if self._buffer.size == 0:
-            return None
-
-        # For multi-channel audio, we need to consider channels
-        if self._buffer.ndim == 2:
-            available_samples = self._buffer.shape[0]
-            if available_samples >= target_samples:
-                result = self._buffer[:target_samples]
-                self._buffer = self._buffer[target_samples:]
-                return result
-        else:
-            # Mono audio
-            if len(self._buffer) >= target_samples:
-                result = self._buffer[:target_samples]
-                self._buffer = self._buffer[target_samples:]
-                return result
-
-        return None
+            self._initialized = True
 
     async def process(self, input_stream: AudioStream) -> AudioStream:
         async for chunk in input_stream:
-            # Set default parameters from first chunk if not specified
-            if self._resample_channels is None:
-                self._resample_channels = chunk.channels
-            if self._resample_width is None:
-                self._resample_width = chunk.width
+            # Initialize unspecified parameters from first chunk
+            self._initialize_from_first_chunk(chunk)
+
+            # Now we know all parameters are set
+            assert self._resample_channels is not None
+            assert self._resample_width is not None
 
             # Check if any conversion is needed
             if (
@@ -172,31 +128,19 @@ class ResamplingBlock(ProcessingBlock):
                 yield chunk
                 continue
 
-            # Calculate target samples per chunk for consistent output
-            target_temporal_samples = self._get_target_samples_per_chunk(chunk)
-
             # Convert to numpy array
             audio_array = self._audio_chunk_to_numpy(chunk)
 
-            # Convert to float for processing (normalize to [-1.0, 1.0])
-            if chunk.width == 1:
-                audio_float = audio_array.astype(np.float32) / np.iinfo(np.int8).max
-            elif chunk.width == 2:
-                audio_float = audio_array.astype(np.float32) / np.iinfo(np.int16).max
-            elif chunk.width == 4:
-                audio_float = audio_array.astype(np.float32) / np.iinfo(np.int32).max
-            else:
-                raise ValueError(f"Unsupported input audio width: {chunk.width}")
-
-            # Handle channel conversion
+            # Handle channel conversion first
             if chunk.channels != self._resample_channels:
                 if chunk.channels == 2 and self._resample_channels == 1:
                     # Convert stereo to mono by averaging channels
-                    if audio_float.ndim == 2:
-                        audio_float = np.mean(audio_float, axis=1)
+                    if audio_array.ndim == 2:
+                        # Average and keep as integer (with proper scaling to prevent overflow)
+                        audio_array = np.mean(audio_array, axis=1, dtype=audio_array.dtype)
                 elif chunk.channels == 1 and self._resample_channels == 2:
                     # Convert mono to stereo by duplicating channel
-                    audio_float = np.column_stack([audio_float, audio_float])
+                    audio_array = np.column_stack([audio_array, audio_array])
                 else:
                     logger.warning(
                         f"Unsupported channel conversion: {chunk.channels} -> {self._resample_channels}"
@@ -204,80 +148,65 @@ class ResamplingBlock(ProcessingBlock):
 
             # Resample if needed (handles both mono and multi-channel audio)
             if chunk.rate != self._resample_rate:
-                resampled = soxr.resample(
-                    audio_float, chunk.rate, self._resample_rate, quality=self._quality
-                )
-            else:
-                resampled = audio_float
-
-            # Add processed audio to buffer
-            self._add_to_buffer(resampled)
-
-            # Extract consistent chunks from buffer
-            while True:
-                extracted = self._extract_from_buffer(target_temporal_samples)
-                if extracted is None:
-                    break
-
-                # At this point, these should be set from the chunk
-                assert self._resample_width is not None
-                assert self._resample_channels is not None
-
-                # Convert back to target format (scale from [-1.0, 1.0] to target bit depth)
-                if self._resample_width == 1:
-                    resampled_int = (extracted * np.iinfo(np.int8).max).astype(np.int8)
-                elif self._resample_width == 2:
-                    resampled_int = (extracted * np.iinfo(np.int16).max).astype(np.int16)
-                elif self._resample_width == 4:
-                    resampled_int = (extracted * np.iinfo(np.int32).max).astype(np.int32)
+                # Convert to supported format for soxr if needed
+                if audio_array.dtype == np.int8:
+                    # Convert int8 to int16 for resampling
+                    resample_input = audio_array.astype(np.int16) << 8
+                    resampled = soxr.resample(
+                        resample_input, chunk.rate, self._resample_rate, quality=self._quality
+                    )
+                    # Convert back to int8 if target is int8
+                    if self._resample_width == 1:
+                        resampled = (resampled >> 8).astype(np.int8)
                 else:
-                    raise ValueError(f"Unsupported target audio width: {self._resample_width}")
-
-                # Create new AudioChunk with consistent sample count
-                resampled_chunk = self._numpy_to_audio_chunk(
-                    resampled_int,
-                    self._resample_rate,
-                    self._resample_width,
-                    self._resample_channels,
-                )
-
-                yield resampled_chunk
-
-        # Yield any remaining audio in buffer at the end
-        if self._buffer.size > 0:
-            # At this point, these should be set
-            assert self._resample_width is not None
-            assert self._resample_channels is not None
-
-            # Convert remaining buffer content
-            if self._resample_width == 1:
-                remaining_int = (self._buffer * np.iinfo(np.int8).max).astype(np.int8)
-            elif self._resample_width == 2:
-                remaining_int = (self._buffer * np.iinfo(np.int16).max).astype(np.int16)
-            elif self._resample_width == 4:
-                remaining_int = (self._buffer * np.iinfo(np.int32).max).astype(np.int32)
+                    resampled = soxr.resample(
+                        audio_array, chunk.rate, self._resample_rate, quality=self._quality
+                    )
             else:
-                raise ValueError(f"Unsupported target audio width: {self._resample_width}")
+                resampled = audio_array
 
-            # Create final chunk with remaining samples
-            if remaining_int.size > 0:
-                final_chunk = self._numpy_to_audio_chunk(
-                    remaining_int,
-                    self._resample_rate,
-                    self._resample_width,
-                    self._resample_channels,
-                )
-                yield final_chunk
+            # Handle bit depth conversion if needed
+            if chunk.width != self._resample_width:
+                if chunk.width == 4 and self._resample_width == 2:
+                    # Convert 32-bit to 16-bit by right-shifting
+                    resampled_int = (resampled >> 16).astype(np.int16)
+                elif chunk.width == 2 and self._resample_width == 4:
+                    # Convert 16-bit to 32-bit by left-shifting
+                    resampled_int = resampled.astype(np.int32) << 16
+                elif chunk.width == 4 and self._resample_width == 1:
+                    # Convert 32-bit to 8-bit
+                    resampled_int = (resampled >> 24).astype(np.int8)
+                elif chunk.width == 2 and self._resample_width == 1:
+                    # Convert 16-bit to 8-bit
+                    resampled_int = (resampled >> 8).astype(np.int8)
+                elif chunk.width == 1 and self._resample_width == 2:
+                    # Convert 8-bit to 16-bit
+                    resampled_int = resampled.astype(np.int16) << 8
+                elif chunk.width == 1 and self._resample_width == 4:
+                    # Convert 8-bit to 32-bit
+                    resampled_int = resampled.astype(np.int32) << 24
+                else:
+                    raise ValueError(
+                        f"Unsupported bit depth conversion: {chunk.width} -> {self._resample_width}"
+                    )
+            else:
+                resampled_int = resampled
+
+            # Create new AudioChunk with resampled data
+            resampled_chunk = self._numpy_to_audio_chunk(
+                resampled_int,
+                self._resample_rate,
+                self._resample_width,
+                self._resample_channels,
+            )
+
+            yield resampled_chunk
 
     async def open(self):
-        self._buffer = np.array([])
-        self._buffered_samples = 0
-        self._output_format_set = False
+        self._initialized = False
 
     async def close(self):
-        self._buffer = np.array([])
-        self._buffered_samples = 0
-        self._output_format_set = False
+        self._initialized = False
 
 
 class RechunkingBlock(ProcessingBlock):

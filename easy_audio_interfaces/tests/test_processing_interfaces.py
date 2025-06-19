@@ -740,12 +740,7 @@ async def test_resampling_block_buffering_consistent_samples():
     )
 
     # Convert to mono 16-bit (both channel and width conversion)
-    resampler = ResamplingBlock(
-        resample_rate=output_rate,
-        resample_channels=1,
-        resample_width=2,
-        target_samples_per_chunk=1024,  # Fixed chunk size for consistent output
-    )
+    resampler = ResamplingBlock(resample_rate=output_rate, resample_channels=1, resample_width=2)
 
     output_chunks = []
     async for output_chunk in resampler.process(async_generator(input_chunk)):
@@ -753,19 +748,17 @@ async def test_resampling_block_buffering_consistent_samples():
 
     assert len(output_chunks) > 0
 
-    # All chunks except possibly the last should have exactly 1024 samples
-    for i, chunk in enumerate(output_chunks[:-1]):
-        assert chunk.samples == 1024, f"Chunk {i} has {chunk.samples} samples, expected 1024"
+    # All chunks should have correct format and preserve temporal samples
+    total_output_samples = sum(chunk.samples for chunk in output_chunks)
+
+    for chunk in output_chunks:
         assert chunk.channels == 1
         assert chunk.width == 2
         assert chunk.rate == output_rate
 
-    # Last chunk can be smaller
-    last_chunk = output_chunks[-1]
-    assert last_chunk.samples <= 1024
-    assert last_chunk.channels == 1
-    assert last_chunk.width == 2
-    assert last_chunk.rate == output_rate
+    # Total temporal samples should be preserved
+    input_temporal_samples = input_chunk.samples
+    assert abs(total_output_samples - input_temporal_samples) <= 1
 
 
 @pytest.mark.asyncio
@@ -842,12 +835,11 @@ async def test_resampling_block_multiple_small_chunks():
         for _ in range(num_chunks)
     ]
 
-    # Convert to mono 16-bit with fixed output chunk size
+    # Convert to mono 16-bit
     resampler = ResamplingBlock(
         resample_rate=sample_rate,
         resample_channels=1,
         resample_width=2,
-        target_samples_per_chunk=2048,
     )
 
     async def multi_chunk_generator():
@@ -860,9 +852,12 @@ async def test_resampling_block_multiple_small_chunks():
 
     assert len(output_chunks) > 0
 
-    # Most chunks should have exactly 2048 samples due to buffering
-    consistent_chunks = [chunk for chunk in output_chunks if chunk.samples == 2048]
-    assert len(consistent_chunks) >= 1, "Should have at least one consistently sized chunk"
+    # Verify temporal samples are preserved across all input chunks
+    total_input_samples = sum(chunk.samples for chunk in input_chunks)
+    total_output_samples = sum(chunk.samples for chunk in output_chunks)
+    assert abs(total_output_samples - total_input_samples) <= len(
+        input_chunks
+    )  # Allow small tolerance per chunk
 
     # All chunks should have correct format
     for chunk in output_chunks:
