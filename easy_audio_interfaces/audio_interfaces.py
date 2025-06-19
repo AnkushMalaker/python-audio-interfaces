@@ -33,11 +33,18 @@ class ResamplingBlock(ProcessingBlock):
         resample_channels: int | None = None,
         resample_width: int | None = None,
         quality: str = "HQ",  # HQ, VHQ, MQ, LQ, or QQ
+        target_samples_per_chunk: int | None = None,  # For consistent chunking
     ):
         self._resample_rate = resample_rate
         self._resample_channels = resample_channels
         self._resample_width = resample_width
         self._quality = quality
+        self._target_samples_per_chunk = target_samples_per_chunk
+
+        # Buffering for maintaining consistent sample counts
+        self._buffer = np.array([])
+        self._buffered_samples = 0
+        self._output_format_set = False
 
     @property
     def sample_rate(self) -> int:
@@ -93,23 +100,80 @@ class ResamplingBlock(ProcessingBlock):
             channels=channels,
         )
 
-    async def process(self, input_stream: AudioStream) -> AudioStream:
+    def _get_target_samples_per_chunk(self, input_chunk: AudioChunk) -> int:
+        """Determine target samples per chunk for consistent output."""
+        if self._target_samples_per_chunk is not None:
+            return self._target_samples_per_chunk
 
+        # AudioChunk.samples already represents temporal samples
+        input_temporal_samples = input_chunk.samples
+
+        # If rate conversion is happening, adjust target samples
+        if input_chunk.rate != self._resample_rate:
+            target_temporal_samples = int(
+                input_temporal_samples * self._resample_rate / input_chunk.rate
+            )
+        else:
+            target_temporal_samples = input_temporal_samples
+
+        return target_temporal_samples
+
+    def _add_to_buffer(self, audio_data: np.ndarray):
+        """Add audio data to internal buffer."""
+        if self._buffer.size == 0:
+            self._buffer = audio_data
+        else:
+            if audio_data.ndim == self._buffer.ndim:
+                self._buffer = np.concatenate([self._buffer, audio_data])
+            else:
+                # Handle dimension mismatch (mono vs stereo)
+                if self._buffer.ndim == 1 and audio_data.ndim == 2:
+                    self._buffer = self._buffer.reshape(-1, 1)
+                elif self._buffer.ndim == 2 and audio_data.ndim == 1:
+                    audio_data = audio_data.reshape(-1, 1)
+                self._buffer = np.concatenate([self._buffer, audio_data])
+
+    def _extract_from_buffer(self, target_samples: int) -> np.ndarray | None:
+        """Extract target number of samples from buffer."""
+        if self._buffer.size == 0:
+            return None
+
+        # For multi-channel audio, we need to consider channels
+        if self._buffer.ndim == 2:
+            available_samples = self._buffer.shape[0]
+            if available_samples >= target_samples:
+                result = self._buffer[:target_samples]
+                self._buffer = self._buffer[target_samples:]
+                return result
+        else:
+            # Mono audio
+            if len(self._buffer) >= target_samples:
+                result = self._buffer[:target_samples]
+                self._buffer = self._buffer[target_samples:]
+                return result
+
+        return None
+
+    async def process(self, input_stream: AudioStream) -> AudioStream:
         async for chunk in input_stream:
-            # Check if any conversion is needed
+            # Set default parameters from first chunk if not specified
             if self._resample_channels is None:
                 self._resample_channels = chunk.channels
             if self._resample_width is None:
                 self._resample_width = chunk.width
 
+            # Check if any conversion is needed
             if (
                 chunk.rate == self._resample_rate
                 and chunk.channels == self._resample_channels
                 and chunk.width == self._resample_width
             ):
-                # No conversion needed
+                # No conversion needed, pass through
                 yield chunk
                 continue
+
+            # Calculate target samples per chunk for consistent output
+            target_temporal_samples = self._get_target_samples_per_chunk(chunk)
 
             # Convert to numpy array
             audio_array = self._audio_chunk_to_numpy(chunk)
@@ -146,28 +210,74 @@ class ResamplingBlock(ProcessingBlock):
             else:
                 resampled = audio_float
 
-            # Convert back to target format (scale from [-1.0, 1.0] to target bit depth)
+            # Add processed audio to buffer
+            self._add_to_buffer(resampled)
+
+            # Extract consistent chunks from buffer
+            while True:
+                extracted = self._extract_from_buffer(target_temporal_samples)
+                if extracted is None:
+                    break
+
+                # At this point, these should be set from the chunk
+                assert self._resample_width is not None
+                assert self._resample_channels is not None
+
+                # Convert back to target format (scale from [-1.0, 1.0] to target bit depth)
+                if self._resample_width == 1:
+                    resampled_int = (extracted * np.iinfo(np.int8).max).astype(np.int8)
+                elif self._resample_width == 2:
+                    resampled_int = (extracted * np.iinfo(np.int16).max).astype(np.int16)
+                elif self._resample_width == 4:
+                    resampled_int = (extracted * np.iinfo(np.int32).max).astype(np.int32)
+                else:
+                    raise ValueError(f"Unsupported target audio width: {self._resample_width}")
+
+                # Create new AudioChunk with consistent sample count
+                resampled_chunk = self._numpy_to_audio_chunk(
+                    resampled_int,
+                    self._resample_rate,
+                    self._resample_width,
+                    self._resample_channels,
+                )
+
+                yield resampled_chunk
+
+        # Yield any remaining audio in buffer at the end
+        if self._buffer.size > 0:
+            # At this point, these should be set
+            assert self._resample_width is not None
+            assert self._resample_channels is not None
+
+            # Convert remaining buffer content
             if self._resample_width == 1:
-                resampled_int = (resampled * np.iinfo(np.int8).max).astype(np.int8)
+                remaining_int = (self._buffer * np.iinfo(np.int8).max).astype(np.int8)
             elif self._resample_width == 2:
-                resampled_int = (resampled * np.iinfo(np.int16).max).astype(np.int16)
+                remaining_int = (self._buffer * np.iinfo(np.int16).max).astype(np.int16)
             elif self._resample_width == 4:
-                resampled_int = (resampled * np.iinfo(np.int32).max).astype(np.int32)
+                remaining_int = (self._buffer * np.iinfo(np.int32).max).astype(np.int32)
             else:
                 raise ValueError(f"Unsupported target audio width: {self._resample_width}")
 
-            # Create new AudioChunk with resampled data
-            resampled_chunk = self._numpy_to_audio_chunk(
-                resampled_int, self._resample_rate, self._resample_width, self._resample_channels
-            )
-
-            yield resampled_chunk
+            # Create final chunk with remaining samples
+            if remaining_int.size > 0:
+                final_chunk = self._numpy_to_audio_chunk(
+                    remaining_int,
+                    self._resample_rate,
+                    self._resample_width,
+                    self._resample_channels,
+                )
+                yield final_chunk
 
     async def open(self):
-        pass
+        self._buffer = np.array([])
+        self._buffered_samples = 0
+        self._output_format_set = False
 
     async def close(self):
-        pass
+        self._buffer = np.array([])
+        self._buffered_samples = 0
+        self._output_format_set = False
 
 
 class RechunkingBlock(ProcessingBlock):
