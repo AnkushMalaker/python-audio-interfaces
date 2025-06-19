@@ -19,9 +19,11 @@ class StreamFromCommand(AudioSource):
     def __init__(self, command: str):
         self._command = command
 
-    async def open(self): ...
+    async def open(self):
+        ...
 
-    async def close(self): ...
+    async def close(self):
+        ...
 
 
 class ResamplingBlock(ProcessingBlock):

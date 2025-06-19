@@ -73,3 +73,10 @@ module = [
   "soxr.*",
 ]
 ignore_missing_imports = true
+
+[dependency-groups]
+dev = [
+    "black>=25.1.0",
+    "isort>=6.0.1",
+    "pre-commit>=4.2.0",
+]

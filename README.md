@@ -20,7 +20,7 @@ from easy_audio_interfaces import SocketReceiver, LocalFileSink, RechunkingBlock
 async with SocketReceiver() as receiver, LocalFileSink("output.wav") as sink:
     rechunker = RechunkingBlock(chunk_size=512)
     resampler = ResamplingBlock(original_sample_rate=receiver.sample_rate, resample_rate=16000)
-    
+
     rechunked_stream = rechunker.rechunk(receiver)
     resampled_stream = resampler.resample(rechunked_stream)
     await sink.write_from(resampled_stream)
@@ -64,7 +64,7 @@ uv add "easy-audio-interfaces[local-audio]"
 - **SocketReceiver**: Receives audio data over a WebSocket connection
 - **LocalFileStreamer**: Streams audio data from a local file
 
-#### Audio Sinks  
+#### Audio Sinks
 - **SocketStreamer**: Sends audio data over a WebSocket connection
 - **LocalFileSink**: Writes audio data to a local file
 
@@ -93,7 +93,7 @@ Transfer audio files over a network:
 # Sender
 python -m easy_audio_interfaces.examples.file_network_transfer sender input_file.wav --host localhost --port 8080
 
-# Receiver  
+# Receiver
 python -m easy_audio_interfaces.examples.file_network_transfer receiver output_file.wav --host 0.0.0.0 --port 8080
 ```
 
