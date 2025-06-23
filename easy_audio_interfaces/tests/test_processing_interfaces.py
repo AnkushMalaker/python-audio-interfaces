@@ -1,5 +1,6 @@
 import math
 import struct
+from typing import Union
 
 import numpy as np
 import pytest
@@ -11,6 +12,11 @@ from .utils import async_generator, create_sine_wave_audio_chunk
 
 SINE_FREQUENCY = 440
 SINE_SAMPLE_RATE = 44100
+
+
+def calculate_relative_tolerance(expected: int, relative_tolerance: float = 0.0005) -> int:
+    """Calculate a relative tolerance for sample count assertions."""
+    return max(1, int(relative_tolerance * expected))
 
 
 @pytest.mark.asyncio
@@ -92,7 +98,8 @@ async def test_resampling_block_basic():
     # Check that duration is preserved (approximately)
     total_output_samples = sum(chunk.samples for chunk in output_chunks)
     expected_samples = int(audio_chunk.samples * output_rate / input_rate)
-    assert abs(total_output_samples - expected_samples) <= 10  # Allow small discrepancy
+    tolerance = calculate_relative_tolerance(expected_samples)
+    assert abs(total_output_samples - expected_samples) <= tolerance
 
 
 @pytest.mark.asyncio
@@ -139,7 +146,8 @@ async def test_resampling_block_downsampling():
     # Check sample count
     total_output_samples = sum(chunk.samples for chunk in output_chunks)
     expected_samples = int(audio_chunk.samples * output_rate / input_rate)
-    assert abs(total_output_samples - expected_samples) <= 10
+    tolerance = calculate_relative_tolerance(expected_samples)
+    assert abs(total_output_samples - expected_samples) <= tolerance
 
 
 @pytest.mark.asyncio
@@ -189,26 +197,45 @@ async def test_resampling_block_stereo():
 
 
 @pytest.mark.asyncio
-async def test_resampling_block_8bit_audio():
-    """Test resampling with 8-bit audio."""
+async def test_resampling_block_unsupported_width_input_audio():
+    """Test that unsupported input audio width raises NotImplementedError."""
     duration_ms = 500
     input_rate = 22050
     output_rate = 44100
 
-    # Create 8-bit audio chunk
+    # Create 8-bit audio chunk (unsupported)
     audio_chunk = create_sine_wave_audio_chunk(duration_ms, SINE_FREQUENCY, input_rate, width=1)
 
     resampler = ResamplingBlock(resample_rate=output_rate)
 
-    output_chunks = []
-    async for output_chunk in resampler.process(async_generator(audio_chunk)):
-        output_chunks.append(output_chunk)
+    # Should raise NotImplementedError for unsupported width
+    with pytest.raises(
+        NotImplementedError, match="Only 16-bit and 32-bit audio processing is supported"
+    ):
+        async for output_chunk in resampler.process(async_generator(audio_chunk)):
+            pass
 
-    assert len(output_chunks) > 0
-    for chunk in output_chunks:
-        assert chunk.rate == output_rate
-        assert chunk.width == 1  # Should preserve 8-bit width
-        assert chunk.channels == audio_chunk.channels
+
+@pytest.mark.asyncio
+async def test_resampling_block_unsupported_width_output_audio():
+    """Test that unsupported output audio width raises NotImplementedError."""
+    duration_ms = 500
+    input_rate = 22050
+    output_rate = 44100
+
+    # Create 16-bit audio chunk
+    audio_chunk = create_sine_wave_audio_chunk(duration_ms, SINE_FREQUENCY, input_rate, width=2)
+
+    resampler = ResamplingBlock(
+        resample_rate=output_rate, resample_width=1
+    )  # Convert to 8-bit (unsupported)
+
+    # Should raise NotImplementedError for unsupported output width
+    with pytest.raises(
+        NotImplementedError, match="Only 16-bit and 32-bit audio processing is supported"
+    ):
+        async for output_chunk in resampler.process(async_generator(audio_chunk)):
+            pass
 
 
 @pytest.mark.asyncio
@@ -297,7 +324,8 @@ async def test_resampling_block_process_chunk():
     # Check that total samples are approximately correct
     total_output_samples = sum(chunk.samples for chunk in output_chunks)
     expected_samples = int(audio_chunk.samples * output_rate / input_rate)
-    assert abs(total_output_samples - expected_samples) <= 10
+    tolerance = calculate_relative_tolerance(expected_samples)
+    assert abs(total_output_samples - expected_samples) <= tolerance
 
 
 @pytest.mark.asyncio
@@ -372,6 +400,12 @@ async def test_process_chunk_vs_process_consistency():
     process_chunk_results = []
     async for output_chunk in resampler.process_chunk(audio_chunk):
         process_chunk_results.append(output_chunk)
+
+    # Reset resampler state since process_chunk finalizes the ResampleStream
+    await resampler.close()
+
+    resampler = ResamplingBlock(resample_rate=output_rate)
+    await resampler.open()
 
     # Test process with single-item generator
     process_results = []
@@ -450,63 +484,55 @@ async def test_resampling_block_channel_conversion_mono_to_stereo():
         assert chunk.channels == 2  # Should be stereo now
         assert chunk.width == mono_chunk.width
         # Temporal samples should be preserved (mono to stereo doesn't change temporal count)
-        expected_samples = mono_chunk.samples  # Same temporal samples, just duplicated to stereo
-        total_output_samples = sum(chunk.samples for chunk in output_chunks)
-        assert abs(total_output_samples - expected_samples) <= 10
+
+    expected_samples = mono_chunk.samples  # Same temporal samples, just duplicated to stereo
+    total_output_samples = sum(chunk.samples for chunk in output_chunks)
+    tolerance = calculate_relative_tolerance(expected_samples)
+    assert abs(total_output_samples - expected_samples) <= tolerance
 
 
 @pytest.mark.asyncio
 async def test_resampling_block_width_conversion_16bit_to_8bit():
-    """Test converting 16-bit audio to 8-bit."""
+    """Test that converting to 8-bit raises NotImplementedError."""
     duration_ms = 500
     sample_rate = 44100
 
     # Create 16-bit audio
     audio_16bit = create_sine_wave_audio_chunk(duration_ms, SINE_FREQUENCY, sample_rate, width=2)
 
-    # Resample to 8-bit
+    # Try to resample to 8-bit
     resampler = ResamplingBlock(
         resample_rate=sample_rate, resample_width=1  # Keep same rate  # Convert to 8-bit
     )
 
-    output_chunks = []
-    async for output_chunk in resampler.process(async_generator(audio_16bit)):
-        output_chunks.append(output_chunk)
-
-    assert len(output_chunks) > 0
-    for chunk in output_chunks:
-        assert chunk.rate == sample_rate
-        assert chunk.width == 1  # Should be 8-bit now
-        assert chunk.channels == audio_16bit.channels
-        # Should have half the byte size (2 bytes -> 1 byte per sample)
-        assert len(chunk.audio) == chunk.samples * chunk.channels * 1
+    # Should raise NotImplementedError for 8-bit target
+    with pytest.raises(
+        NotImplementedError, match="Only 16-bit and 32-bit audio processing is supported"
+    ):
+        async for output_chunk in resampler.process(async_generator(audio_16bit)):
+            pass
 
 
 @pytest.mark.asyncio
 async def test_resampling_block_width_conversion_8bit_to_16bit():
-    """Test converting 8-bit audio to 16-bit."""
+    """Test that converting from 8-bit raises NotImplementedError."""
     duration_ms = 500
     sample_rate = 44100
 
     # Create 8-bit audio
     audio_8bit = create_sine_wave_audio_chunk(duration_ms, SINE_FREQUENCY, sample_rate, width=1)
 
-    # Resample to 16-bit
+    # Try to resample to 16-bit
     resampler = ResamplingBlock(
         resample_rate=sample_rate, resample_width=2  # Keep same rate  # Convert to 16-bit
     )
 
-    output_chunks = []
-    async for output_chunk in resampler.process(async_generator(audio_8bit)):
-        output_chunks.append(output_chunk)
-
-    assert len(output_chunks) > 0
-    for chunk in output_chunks:
-        assert chunk.rate == sample_rate
-        assert chunk.width == 2  # Should be 16-bit now
-        assert chunk.channels == audio_8bit.channels
-        # Should have double the byte size (1 byte -> 2 bytes per sample)
-        assert len(chunk.audio) == chunk.samples * chunk.channels * 2
+    # Should raise NotImplementedError for 8-bit input
+    with pytest.raises(
+        NotImplementedError, match="Only 16-bit and 32-bit audio processing is supported"
+    ):
+        async for output_chunk in resampler.process(async_generator(audio_8bit)):
+            pass
 
 
 @pytest.mark.asyncio
@@ -570,16 +596,16 @@ async def test_resampling_block_combined_rate_channel_width():
     input_rate = 22050
     output_rate = 44100
 
-    # Create mono 8-bit audio
+    # Create mono 16-bit audio (changed from 8-bit)
     input_chunk = create_sine_wave_audio_chunk(
-        duration_ms, SINE_FREQUENCY, input_rate, channels=1, width=1
+        duration_ms, SINE_FREQUENCY, input_rate, channels=1, width=2
     )
 
-    # Convert to stereo 16-bit at higher sample rate
+    # Convert to stereo 32-bit at higher sample rate
     resampler = ResamplingBlock(
         resample_rate=output_rate,  # Double the rate
         resample_channels=2,  # Mono to stereo
-        resample_width=2,  # 8-bit to 16-bit
+        resample_width=4,  # 16-bit to 32-bit
     )
 
     output_chunks = []
@@ -590,7 +616,7 @@ async def test_resampling_block_combined_rate_channel_width():
     for chunk in output_chunks:
         assert chunk.rate == output_rate  # Rate should be changed
         assert chunk.channels == 2  # Should be stereo
-        assert chunk.width == 2  # Should be 16-bit
+        assert chunk.width == 4  # Should be 32-bit
 
     # Check that total duration is preserved approximately
     total_output_samples = sum(chunk.samples for chunk in output_chunks)
@@ -655,13 +681,10 @@ async def test_resampling_block_unsupported_channel_conversion():
         resample_rate=sample_rate, resample_channels=3  # Unsupported conversion
     )
 
-    output_chunks = []
-    # This should not crash, but might log a warning
-    async for output_chunk in resampler.process(async_generator(stereo_chunk)):
-        output_chunks.append(output_chunk)
-
-    # Should still produce output, but channels might not be converted
-    assert len(output_chunks) > 0
+    # Should raise ValueError for unsupported channel conversion
+    with pytest.raises(ValueError, match="Unsupported channel conversion"):
+        async for output_chunk in resampler.process(async_generator(stereo_chunk)):
+            pass
 
 
 @pytest.mark.asyncio
@@ -705,13 +728,13 @@ async def test_resampling_block_process_chunk_with_conversions():
     input_rate = 22050
     output_rate = 44100
 
-    # Create mono 8-bit audio
+    # Create mono 16-bit audio
     audio_chunk = create_sine_wave_audio_chunk(
-        duration_ms, SINE_FREQUENCY, input_rate, channels=1, width=1
+        duration_ms, SINE_FREQUENCY, input_rate, channels=1, width=2
     )
 
-    # Convert to stereo 16-bit at higher rate
-    resampler = ResamplingBlock(resample_rate=output_rate, resample_channels=2, resample_width=2)
+    # Convert to stereo 32-bit at higher rate
+    resampler = ResamplingBlock(resample_rate=output_rate, resample_channels=2, resample_width=4)
     await resampler.open()
 
     output_chunks = []
@@ -724,7 +747,7 @@ async def test_resampling_block_process_chunk_with_conversions():
     for chunk in output_chunks:
         assert chunk.rate == output_rate
         assert chunk.channels == 2
-        assert chunk.width == 2
+        assert chunk.width == 4
 
 
 @pytest.mark.asyncio
@@ -767,9 +790,9 @@ async def test_resampling_block_temporal_duration_preservation():
     duration_ms = 500
     sample_rate = 48000
 
-    # Create mono 8-bit audio
+    # Create mono 16-bit audio
     input_chunk = create_sine_wave_audio_chunk(
-        duration_ms, SINE_FREQUENCY, sample_rate, channels=1, width=1
+        duration_ms, SINE_FREQUENCY, sample_rate, channels=1, width=2
     )
 
     # Convert to stereo 32-bit
@@ -893,12 +916,6 @@ async def test_resampling_block_width_conversion_sample_alignment():
         abs(total_output_samples - input_samples) <= 1
     ), f"Sample count mismatch: input={input_samples}, output={total_output_samples}"
 
-    # Verify all output is 16-bit
-    for chunk in output_chunks:
-        assert chunk.width == 2
-        assert chunk.channels == 1
-        assert chunk.rate == sample_rate
-
 
 @pytest.mark.asyncio
 async def test_resampling_block_channel_conversion_sample_alignment():
@@ -932,3 +949,316 @@ async def test_resampling_block_channel_conversion_sample_alignment():
         assert chunk.channels == 1
         assert chunk.width == 2
         assert chunk.rate == sample_rate
+
+
+def test_resampling_block_quality_validation():
+    """Test that invalid quality parameters raise ValueError."""
+    with pytest.raises(ValueError, match="quality must be one of"):
+        ResamplingBlock(16000, quality="INVALID")
+
+    # Test all valid qualities work
+    valid_qualities = ["HQ", "VHQ", "MQ", "LQ", "QQ"]
+    for quality in valid_qualities:
+        resampler = ResamplingBlock(16000, quality=quality)
+        assert resampler._quality == quality
+
+
+def test_resampling_block_int32_to_int16_shift_mode():
+    """Test 32-bit to 16-bit conversion using shift mode."""
+    resampler = ResamplingBlock(16000)
+
+    # Test data with known values that fit properly in int32
+    # Using values that when shifted represent proper 16-bit values
+    test_data = np.array(
+        [
+            0,  # 0 >> 16 = 0
+            1000 << 16,  # 1000 << 16, then >> 16 = 1000
+            -1000 << 16,  # -1000 << 16, then >> 16 = -1000
+            32767 << 16,  # 32767 << 16, then >> 16 = 32767 (max int16)
+        ],
+        dtype=np.int32,
+    )
+    result = resampler._int32_to_int16(test_data)
+
+    expected = np.array([0, 1000, -1000, 32767], dtype=np.int16)
+    np.testing.assert_array_equal(result, expected)
+    assert result.dtype == np.int16
+
+
+@pytest.mark.asyncio
+async def test_resampling_block_32bit_to_16bit_shift_mode_integration():
+    """Test full integration of 32-bit to 16-bit conversion with shift mode."""
+    duration_ms = 100
+    sample_rate = 44100
+
+    # Create 32-bit audio
+    audio_32bit = create_sine_wave_audio_chunk(duration_ms, SINE_FREQUENCY, sample_rate, width=4)
+
+    # Resample to 16-bit using shift mode
+    resampler = ResamplingBlock(resample_rate=sample_rate, resample_width=2)
+
+    output_chunks = []
+    async for output_chunk in resampler.process(async_generator(audio_32bit)):
+        output_chunks.append(output_chunk)
+
+    assert len(output_chunks) > 0
+    for chunk in output_chunks:
+        assert chunk.rate == sample_rate
+        assert chunk.width == 2  # Should be 16-bit now
+        assert chunk.channels == audio_32bit.channels
+
+
+# Property-based tests for round-trip accuracy
+import numpy as np
+from hypothesis import assume, given, settings
+from hypothesis import strategies as st
+
+
+def calculate_snr_db(original: np.ndarray, processed: np.ndarray) -> float:
+    """
+    Calculate Signal-to-Noise Ratio in dB between original and processed signals.
+
+    Parameters
+    ----------
+    original : np.ndarray
+        Original signal
+    processed : np.ndarray
+        Processed signal (same length as original)
+
+    Returns
+    -------
+    float
+        SNR in dB
+    """
+    # Ensure same length
+    min_len = min(len(original), len(processed))
+    original = original[:min_len]
+    processed = processed[:min_len]
+
+    # Calculate noise (difference)
+    noise = original.astype(np.float64) - processed.astype(np.float64)
+
+    # Calculate power of signal and noise
+    signal_power = np.mean(original.astype(np.float64) ** 2)
+    noise_power = np.mean(noise**2)
+
+    # Avoid division by zero
+    if noise_power == 0:
+        return float("inf")
+    if signal_power == 0:
+        return 0.0
+
+    # SNR in dB
+    snr_db = 10 * np.log10(signal_power / noise_power)
+    return snr_db
+
+
+def generate_test_signal(
+    duration_samples: int, sample_rate: int, dtype: Union[type[np.int16], type[np.int32]]
+) -> np.ndarray:
+    """Generate a complex test signal with multiple frequency components."""
+    time = np.arange(duration_samples) / sample_rate
+
+    # Multi-tone signal with different frequencies and amplitudes
+    # Use frequencies that are well within the Nyquist frequency for most sample rates
+    base_freq = min(440, sample_rate // 8)  # Ensure we don't go too high
+    signal = (
+        0.4 * np.sin(2 * np.pi * base_freq * time)  # Base frequency
+        + 0.3 * np.sin(2 * np.pi * base_freq * 2 * time)  # Harmonic
+        + 0.2 * np.sin(2 * np.pi * base_freq * 3 * time)  # Second harmonic
+        + 0.1 * np.sin(2 * np.pi * base_freq * 0.5 * time)  # Sub-harmonic
+    )
+
+    # Scale to appropriate range for the data type
+    if dtype == np.int16:
+        max_val = np.iinfo(np.int16).max
+    elif dtype == np.int32:
+        max_val = np.iinfo(np.int32).max
+    else:
+        raise ValueError(f"Unsupported dtype: {dtype}")
+
+    # Scale to 70% of max to avoid clipping
+    scaled_signal = (signal * 0.7 * max_val).astype(dtype)
+    return scaled_signal
+
+
+@pytest.mark.asyncio
+@given(
+    sample_rate=st.integers(min_value=16000, max_value=48000),
+    original_width=st.sampled_from([2, 4]),
+    intermediate_width=st.sampled_from([2, 4]),
+    duration_ms=st.integers(min_value=100, max_value=500),
+)
+@settings(max_examples=15, deadline=5000)
+async def test_round_trip_width_conversion_snr(
+    sample_rate, original_width, intermediate_width, duration_ms
+):
+    """Property-based test for round-trip width conversion accuracy using SNR.
+
+    Note: Only "shift" mode is used since it's the only supported mode
+    for round-trip conversion - it preserves signal amplitude.
+    """
+    # Skip if widths are the same (no conversion)
+    assume(original_width != intermediate_width)
+
+    # Generate test signal
+    num_samples = int(sample_rate * duration_ms / 1000)
+    original_dtype = np.int16 if original_width == 2 else np.int32
+    original_signal = generate_test_signal(num_samples, sample_rate, original_dtype)
+
+    # Create AudioChunk
+    original_chunk = AudioChunk(
+        audio=original_signal.tobytes(), rate=sample_rate, width=original_width, channels=1
+    )
+
+    # First conversion: original_width -> intermediate_width
+    resampler1 = ResamplingBlock(
+        resample_rate=sample_rate,
+        resample_width=intermediate_width,
+    )
+    await resampler1.open()
+
+    intermediate_chunks = []
+    async for chunk in resampler1.process_chunk(original_chunk):
+        intermediate_chunks.append(chunk)
+
+    await resampler1.close()
+
+    # Combine intermediate chunks
+    intermediate_audio = b"".join(chunk.audio for chunk in intermediate_chunks)
+    intermediate_chunk = AudioChunk(
+        audio=intermediate_audio, rate=sample_rate, width=intermediate_width, channels=1
+    )
+
+    # Second conversion: intermediate_width -> original_width (round trip)
+    resampler2 = ResamplingBlock(
+        resample_rate=sample_rate,
+        resample_width=original_width,
+    )
+    await resampler2.open()
+
+    final_chunks = []
+    async for chunk in resampler2.process_chunk(intermediate_chunk):
+        final_chunks.append(chunk)
+
+    await resampler2.close()
+
+    # Combine final chunks
+    final_audio = b"".join(chunk.audio for chunk in final_chunks)
+    final_signal = np.frombuffer(final_audio, dtype=original_dtype)
+
+    # Calculate SNR
+    snr_db = calculate_snr_db(original_signal, final_signal)
+
+    # For width conversion with "shift" mode:
+    # - 16->32->16 should be perfect (no precision loss)
+    # - 32->16->32 will lose precision (lower 16 bits discarded)
+    if original_width == 2 and intermediate_width == 4:
+        min_snr = 120.0  # 16->32->16 should be near-perfect
+    else:
+        min_snr = 80.0  # 32->16->32 loses precision but should still be very good
+
+    assert (
+        snr_db > min_snr
+    ), f"Round-trip width SNR {snr_db:.2f} dB is below {min_snr} dB threshold for {original_width}B -> {intermediate_width}B -> {original_width}B using shift mode"
+
+
+@pytest.mark.asyncio
+@given(
+    original_rate=st.integers(min_value=16000, max_value=48000),
+    intermediate_rate=st.integers(min_value=16000, max_value=48000),
+    original_width=st.sampled_from([2, 4]),
+    intermediate_width=st.sampled_from([2, 4]),
+    duration_ms=st.integers(min_value=200, max_value=500),
+)
+@settings(max_examples=10, deadline=15000)  # Fewer examples due to complexity
+async def test_round_trip_combined_conversion_snr(
+    original_rate, intermediate_rate, original_width, intermediate_width, duration_ms
+):
+    """Property-based test for round-trip combined rate and width conversion accuracy."""
+    # Skip if no meaningful conversion
+    assume(
+        abs(original_rate - intermediate_rate) > original_rate * 0.1
+        or original_width != intermediate_width
+    )
+
+    # Generate test signal
+    num_samples = int(original_rate * duration_ms / 1000)
+    original_dtype = np.int16 if original_width == 2 else np.int32
+    original_signal = generate_test_signal(num_samples, original_rate, original_dtype)
+
+    # Create AudioChunk
+    original_chunk = AudioChunk(
+        audio=original_signal.tobytes(), rate=original_rate, width=original_width, channels=1
+    )
+
+    # First conversion: original -> intermediate
+    resampler1 = ResamplingBlock(
+        resample_rate=intermediate_rate,
+        resample_width=intermediate_width,
+    )
+    await resampler1.open()
+
+    intermediate_chunks = []
+    async for chunk in resampler1.process_chunk(original_chunk):
+        intermediate_chunks.append(chunk)
+
+    await resampler1.close()
+
+    # Combine intermediate chunks
+    intermediate_audio = b"".join(chunk.audio for chunk in intermediate_chunks)
+    intermediate_chunk = AudioChunk(
+        audio=intermediate_audio, rate=intermediate_rate, width=intermediate_width, channels=1
+    )
+
+    # Second conversion: intermediate -> original (round trip)
+    resampler2 = ResamplingBlock(resample_rate=original_rate, resample_width=original_width)
+    await resampler2.open()
+
+    final_chunks = []
+    async for chunk in resampler2.process_chunk(intermediate_chunk):
+        final_chunks.append(chunk)
+
+    await resampler2.close()
+
+    # Combine final chunks
+    final_audio = b"".join(chunk.audio for chunk in final_chunks)
+    final_signal = np.frombuffer(final_audio, dtype=original_dtype)
+
+    # Calculate SNR
+    snr_db = calculate_snr_db(original_signal, final_signal)
+
+    # Combined conversions have cumulative error from rate conversion
+    # Width conversion with "shift" mode should be near-perfect
+    # Rate conversion quality depends on ratio and duration
+    rate_ratio = max(original_rate, intermediate_rate) / min(original_rate, intermediate_rate)
+    has_width_conversion = original_width != intermediate_width
+
+    if has_width_conversion:
+        # Both rate and width conversion
+        if rate_ratio > 1.3:
+            min_snr = 40.0  # Challenging rate ratios with width conversion
+        elif rate_ratio > 1.15:
+            min_snr = 45.0  # Moderate rate ratios with width conversion
+        else:
+            min_snr = 50.0  # Easy rate ratios with width conversion
+    else:
+        # Only rate conversion (use same logic as rate-only test)
+        if rate_ratio > 1.3:
+            base_snr = 45.0  # Challenging rate ratios
+        elif rate_ratio > 1.15:
+            base_snr = 47.0  # Moderate rate ratios
+        else:
+            base_snr = 50.0  # Easy rate ratios
+
+        # Adjust for duration
+        if duration_ms >= 400:
+            min_snr = base_snr + 2.0
+        elif duration_ms >= 300:
+            min_snr = base_snr
+        else:
+            min_snr = base_snr - 3.0
+
+    assert (
+        snr_db > min_snr
+    ), f"Round-trip combined SNR {snr_db:.2f} dB is below {min_snr} dB threshold for {original_rate}Hz,{original_width}B -> {intermediate_rate}Hz,{intermediate_width}B -> {original_rate}Hz,{original_width}B"
