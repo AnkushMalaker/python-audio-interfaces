@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import socket
 import time
 from asyncio import Task
 from collections.abc import Coroutine
@@ -244,3 +245,247 @@ class SocketClient(AudioSink):
 
     async def __aiter__(self):
         yield
+
+
+class TCPServer(AudioSource):
+    """
+    A class that represents a TCP audio source receiver.
+
+    This class allows for receiving audio data over a TCP connection. It handles
+    client connections, processes incoming audio data, and manages the TCP server.
+
+    Attributes:
+        sample_rate (int): The sample rate of the audio (default is 16000 Hz).
+        channels (int): The number of audio channels (default is 2).
+        port (int): The port on which the TCP server listens (default is 8989).
+        host (str): The host address for the TCP server (default is "0.0.0.0").
+        sample_width (int): The sample width in bytes (default is 2 for 16-bit).
+        chunk_size (int): The size of data chunks to read from the socket (default is 4096).
+        post_process_bytes_fn (Optional[Callable[[bytes], AudioChunk]]): A function to process
+            incoming byte data into an AudioChunk.
+
+    Methods:
+        open(): Starts the TCP server and waits for a client connection.
+        read() -> Optional[AudioChunk]: Reads audio data from the TCP client.
+        iter_frames() -> AsyncGenerator[AudioChunk, None]: Asynchronously iterates over received frames.
+        close(): Closes the TCP server and client connections.
+    """
+
+    def __init__(
+        self,
+        sample_rate: int = 16000,
+        channels: int = 1,
+        port: int = 8989,
+        host: str = "0.0.0.0",
+        sample_width: int = 2,
+        chunk_size: int = 4096,
+        post_process_bytes_fn: Optional[Callable[[bytes], AudioChunk]] = None,
+    ):
+        self._sample_rate = sample_rate
+        self._channels = channels
+        self._port = port
+        self._host = host
+        self._sample_width = sample_width
+        self._chunk_size = chunk_size
+        self.post_process_bytes_fn = post_process_bytes_fn
+
+        self._server_socket: Optional[socket.socket] = None
+        self._client_socket: Optional[socket.socket] = None
+        self._client_addr: Optional[tuple] = None
+        self._is_running = False
+
+    @property
+    def sample_rate(self) -> int:
+        return self._sample_rate
+
+    @property
+    def channels(self) -> int:
+        return self._channels
+
+    async def open(self):
+        """Start the TCP server and wait for a client connection."""
+        self._server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self._server_socket.bind((self._host, self._port))
+        self._server_socket.listen(1)
+        self._server_socket.setblocking(False)
+
+        logger.info(f"TCP server listening on {self._host}:{self._port}")
+
+        # Wait for client connection
+        loop = asyncio.get_event_loop()
+        self._client_socket, self._client_addr = await loop.sock_accept(self._server_socket)
+        self._client_socket.setblocking(False)
+
+        if self._client_addr:
+            logger.info(f"Client connected from {self._client_addr[0]}:{self._client_addr[1]}")
+        self._is_running = True
+
+    async def read(self) -> Optional[AudioChunk]:
+        """Read audio data from the TCP client."""
+        if not self._is_running or not self._client_socket:
+            return None
+
+        try:
+            loop = asyncio.get_event_loop()
+            data = await loop.sock_recv(self._client_socket, self._chunk_size)
+
+            if not data:
+                logger.warning("Client disconnected")
+                self._is_running = False
+                return None
+
+            # Use post-processing function if provided, otherwise create default AudioChunk
+            if self.post_process_bytes_fn:
+                return self.post_process_bytes_fn(data)
+            else:
+                return AudioChunk(
+                    audio=data,
+                    width=self._sample_width,
+                    rate=self._sample_rate,
+                    channels=self._channels,
+                )
+
+        except ConnectionResetError:
+            logger.info("Client disconnected")
+            self._is_running = False
+            return None
+        except Exception as e:
+            logger.error(f"Error reading from client: {e}")
+            self._is_running = False
+            return None
+
+    async def close(self):
+        """Close the TCP server and client connections."""
+        self._is_running = False
+
+        if self._client_socket:
+            self._client_socket.close()
+            self._client_socket = None
+
+        if self._server_socket:
+            self._server_socket.close()
+            self._server_socket = None
+
+        logger.info("TCP server closed")
+
+    async def iter_frames(self) -> AsyncGenerator[AudioChunk, None]:
+        """Iterate over audio frames from the TCP client."""
+        while self._is_running:
+            chunk = await self.read()
+            if chunk is None:
+                break
+            yield chunk
+
+    async def __aenter__(self) -> "TCPServer":
+        await self.open()
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc_value: Optional[BaseException],
+        traceback: Optional[Type[BaseException]],
+    ):
+        await self.close()
+
+    async def __aiter__(self):
+        async for frame in self.iter_frames():
+            yield frame
+
+
+class TCPClient(AudioSink):
+    """
+    A class that represents a TCP audio sink streamer.
+
+    This class allows for sending audio data over a TCP connection. It handles
+    connecting to a TCP server and sending audio frames.
+
+    Attributes:
+        sample_rate (int): The sample rate of the audio (default is 16000 Hz).
+        channels (int): The number of audio channels (default is 2).
+        port (int): The port to connect to (default is 8989).
+        host (str): The host address to connect to (default is "localhost").
+        sample_width (int): The sample width in bytes (default is 2 for 16-bit).
+
+    Methods:
+        open(): Connects to the TCP server.
+        write(data: AudioChunk): Sends audio data to the TCP server.
+        write_from(input_stream: AsyncIterable[AudioChunk]): Writes audio data from an input stream to the TCP server.
+        close(): Closes the TCP connection.
+    """
+
+    def __init__(
+        self,
+        sample_rate: int = 16000,
+        channels: int = 2,
+        port: int = 8989,
+        host: str = "localhost",
+        sample_width: int = 2,
+    ):
+        self._sample_rate = sample_rate
+        self._channels = channels
+        self._port = port
+        self._host = host
+        self._sample_width = sample_width
+        self._socket: Optional[socket.socket] = None
+
+    @property
+    def sample_rate(self) -> int:
+        return self._sample_rate
+
+    @property
+    def channels(self) -> int:
+        return self._channels
+
+    async def open(self):
+        """Connect to the TCP server."""
+        self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._socket.setblocking(False)
+
+        loop = asyncio.get_event_loop()
+        await loop.sock_connect(self._socket, (self._host, self._port))
+        logger.info(f"Connected to TCP server at {self._host}:{self._port}")
+
+    async def close(self):
+        """Close the TCP connection."""
+        if self._socket:
+            self._socket.close()
+            self._socket = None
+            logger.info("Closed TCP client connection")
+
+    async def write(self, data: AudioChunk):
+        """Send audio data to the TCP server."""
+        if self._socket is None:
+            raise RuntimeError("Socket is not connected. Call 'open()' first.")
+
+        loop = asyncio.get_event_loop()
+        await loop.sock_sendall(self._socket, data.audio)
+        logger.debug(f"Sent {len(data.audio)} bytes to TCP server")
+
+    async def write_from(self, input_stream: AsyncIterable[AudioChunk]):
+        """Write audio data from an input stream to the TCP server."""
+        total_bytes = 0
+        chunk_count = 0
+        async for chunk in input_stream:
+            await self.write(chunk)
+            total_bytes += len(chunk.audio)
+            chunk_count += 1
+        logger.info(f"Sent {chunk_count} chunks ({total_bytes} bytes) to TCP server")
+
+    async def __aenter__(self) -> "TCPClient":
+        await self.open()
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc_value: Optional[BaseException],
+        traceback: Optional[Type[BaseException]],
+    ):
+        await self.close()
+
+    async def __aiter__(self):
+        # TCP client doesn't produce data, so this is an empty async generator
+        return
+        yield  # This line will never be reached, but needed for typing
