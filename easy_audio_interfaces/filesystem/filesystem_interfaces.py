@@ -234,7 +234,7 @@ class RollingFileSink(AudioSink):
         self._max_samples_per_segment = int(segment_duration_seconds * sample_rate)
 
         # Track current file state
-        self._current_file_handle: Optional[wave.Wave_write] = None
+        self._current_sink: Optional[LocalFileSink] = None
         self._current_file_path: Optional[Path] = None
         self._current_samples_written: int = 0
         self._file_counter: int = 0
@@ -255,19 +255,23 @@ class RollingFileSink(AudioSink):
 
     async def _roll_file(self):
         """Close current file and start a new one."""
-        if self._current_file_handle:
-            self._current_file_handle.close()
+        if self._current_sink:
+            await self._current_sink.close()
             logger.info(f"Closed rolled file: {self._current_file_path}")
 
         # Generate new file path
-        filename = self._generate_filename()
+        filename = self.generate_filename()
         self._current_file_path = self._directory / filename
 
-        # Open new file
-        self._current_file_handle = wave.open(str(self._current_file_path), "wb")
-        self._current_file_handle.setnchannels(self._channels)
-        self._current_file_handle.setsampwidth(self._sample_width)
-        self._current_file_handle.setframerate(self._sample_rate)
+        # Create new LocalFileSink instance
+        self._current_sink = LocalFileSink(
+            file_path=self._current_file_path,
+            sample_rate=self._sample_rate,
+            channels=self._channels,
+            sample_width=self._sample_width,
+        )
+        await self._current_sink.open()
+
         self._current_samples_written = 0
         self._file_counter += 1
 
@@ -289,42 +293,24 @@ class RollingFileSink(AudioSink):
         logger.info(f"Opened rolling file sink in directory: {self._directory}")
 
     async def write(self, data: AudioChunk):
-        if self._current_file_handle is None:
+        if self._current_sink is None:
             raise RuntimeError("File sink is not open. Call 'open()' first.")
 
         # Calculate how many samples this chunk contains
         chunk_samples = len(data.audio) // (self._sample_width * self._channels)
 
-        # Process the chunk, potentially splitting it across multiple files
-        remaining_data = data.audio
-        remaining_samples = chunk_samples
+        # Check if adding this chunk would exceed our segment limit
+        if self._current_samples_written + chunk_samples > self._max_samples_per_segment:
+            # Roll to a new file before writing this chunk
+            await self._roll_file()
 
-        while remaining_samples > 0:
-            # Calculate how many samples we can write to the current file
-            samples_available_in_current_file = (
-                self._max_samples_per_segment - self._current_samples_written
-            )
+        # Write the entire chunk to current file
+        await self._current_sink.write(data)
+        self._current_samples_written += chunk_samples
 
-            if samples_available_in_current_file <= 0:
-                # Current file is full, roll to a new one
-                await self._roll_file()
-                samples_available_in_current_file = self._max_samples_per_segment
-
-            # Determine how many samples to write to the current file
-            samples_to_write = min(remaining_samples, samples_available_in_current_file)
-            bytes_to_write = samples_to_write * self._sample_width * self._channels
-
-            # Write the data to current file
-            self._current_file_handle.writeframes(remaining_data[:bytes_to_write])
-            self._current_samples_written += samples_to_write
-
-            # Update remaining data
-            remaining_data = remaining_data[bytes_to_write:]
-            remaining_samples -= samples_to_write
-
-            logger.debug(
-                f"Wrote {bytes_to_write} bytes ({samples_to_write} samples) to {self._current_file_path}"
-            )
+        logger.debug(
+            f"Wrote {len(data.audio)} bytes ({chunk_samples} samples) to {self._current_file_path}"
+        )
 
     async def write_from(self, input_stream: AsyncIterable[AudioChunk] | Iterable[AudioChunk]):
         total_frames = 0
@@ -344,9 +330,9 @@ class RollingFileSink(AudioSink):
         )
 
     async def close(self):
-        if self._current_file_handle:
-            self._current_file_handle.close()
-            self._current_file_handle = None
+        if self._current_sink:
+            await self._current_sink.close()
+            self._current_sink = None
             logger.info(f"Closed final rolled file: {self._current_file_path}")
         logger.info(
             f"Closed rolling file sink. Created {self._file_counter} files in {self._directory}"
