@@ -53,6 +53,10 @@ class InputMicStream(PyAudioInterface, AudioSource):
         self._stop_event = asyncio.Event()
 
     @property
+    def sample_width(self) -> int:
+        return 2  # 16-bit audio
+
+    @property
     def sample_rate(self) -> int:
         return self._sample_rate
 

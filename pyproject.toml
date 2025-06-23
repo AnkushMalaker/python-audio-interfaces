@@ -1,6 +1,6 @@
 [project]
 name = "easy-audio-interfaces"
-version = "0.4.0"
+version = "0.4.1"
 description = "Easy Audio Interfaces is a Python library that provides a simple and flexible way to work with audio streams, including recording, playback, network transfer, and processing."
 readme = "README.md"
 requires-python = ">=3.9,<3.13"
@@ -30,6 +30,7 @@ optional-dependencies = { stt = [
   "pytest-asyncio",
   "hypothesis>=6.135.12",
 ] }
+
 
 
 [build-system]
