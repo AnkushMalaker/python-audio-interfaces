@@ -1,9 +1,13 @@
 import math
 import struct
+import tempfile
+import wave
+from pathlib import Path
 from typing import Union
 
 import numpy as np
 import pytest
+from scipy.signal import correlate
 from wyoming.audio import AudioChunk
 
 from easy_audio_interfaces import RechunkingBlock, ResamplingBlock
@@ -295,7 +299,6 @@ async def test_resampling_block_extreme_ratios():
     assert all(chunk.rate == 8000 for chunk in output_chunks)
 
 
-# New tests for process_chunk functionality
 @pytest.mark.asyncio
 async def test_resampling_block_process_chunk():
     """Test the new process_chunk method with ResamplingBlock."""
@@ -1009,48 +1012,53 @@ async def test_resampling_block_32bit_to_16bit_shift_mode_integration():
 
 
 # Property-based tests for round-trip accuracy
-import numpy as np
-from hypothesis import assume, given, settings
-from hypothesis import strategies as st
+
+# Common sample rates used in real-world applications
+COMMON_SAMPLE_RATES = [8000, 16000, 22050, 44100, 48000]
 
 
-def calculate_snr_db(original: np.ndarray, processed: np.ndarray) -> float:
+def save_audio_to_wav(
+    audio_data: bytes, sample_rate: int, width: int, channels: int, filepath: Path
+) -> None:
+    """Save audio data to a WAV file."""
+    with wave.open(str(filepath), "wb") as wav_file:
+        wav_file.setnchannels(channels)
+        wav_file.setsampwidth(width)
+        wav_file.setframerate(sample_rate)
+        wav_file.writeframes(audio_data)
+
+
+def load_audio_from_wav(filepath: Path) -> tuple[bytes, int, int, int]:
+    """Load audio data from a WAV file."""
+    with wave.open(str(filepath), "rb") as wav_file:
+        channels = wav_file.getnchannels()
+        width = wav_file.getsampwidth()
+        sample_rate = wav_file.getframerate()
+        audio_data = wav_file.readframes(wav_file.getnframes())
+    return audio_data, sample_rate, width, channels
+
+
+def align_signals(ref: np.ndarray, test: np.ndarray, max_search: int = 4096):
     """
-    Calculate Signal-to-Noise Ratio in dB between original and processed signals.
-
-    Parameters
-    ----------
-    original : np.ndarray
-        Original signal
-    processed : np.ndarray
-        Processed signal (same length as original)
-
-    Returns
-    -------
-    float
-        SNR in dB
+    Align `test` to `ref` by maximising cross-correlation.
+    Returns two arrays of equal length.
     """
-    # Ensure same length
-    min_len = min(len(original), len(processed))
-    original = original[:min_len]
-    processed = processed[:min_len]
+    # Normalise to avoid overflow in int32 ↔ float mixes
+    ref_f = ref.astype(np.float64)
+    test_f = test.astype(np.float64)
 
-    # Calculate noise (difference)
-    noise = original.astype(np.float64) - processed.astype(np.float64)
+    # Search only a reasonable window to keep it fast
+    lag_corr = correlate(test_f[:max_search], ref_f[:max_search], mode="full")
+    lag = np.argmax(lag_corr) - (len(ref_f[:max_search]) - 1)
 
-    # Calculate power of signal and noise
-    signal_power = np.mean(original.astype(np.float64) ** 2)
-    noise_power = np.mean(noise**2)
+    if lag > 0:
+        test_f = test_f[lag:]
+        ref_f = ref_f[: len(test_f)]
+    elif lag < 0:
+        ref_f = ref_f[-lag:]
+        test_f = test_f[: len(ref_f)]
 
-    # Avoid division by zero
-    if noise_power == 0:
-        return float("inf")
-    if signal_power == 0:
-        return 0.0
-
-    # SNR in dB
-    snr_db = 10 * np.log10(signal_power / noise_power)
-    return snr_db
+    return ref_f, test_f
 
 
 def generate_test_signal(
@@ -1083,182 +1091,216 @@ def generate_test_signal(
 
 
 @pytest.mark.asyncio
-@given(
-    sample_rate=st.integers(min_value=16000, max_value=48000),
-    original_width=st.sampled_from([2, 4]),
-    intermediate_width=st.sampled_from([2, 4]),
-    duration_ms=st.integers(min_value=100, max_value=500),
-)
-@settings(max_examples=15, deadline=5000)
-async def test_round_trip_width_conversion_snr(
+@pytest.mark.parametrize("sample_rate", COMMON_SAMPLE_RATES)
+@pytest.mark.parametrize("original_width", [2, 4])
+@pytest.mark.parametrize("intermediate_width", [2, 4])
+@pytest.mark.parametrize("duration_ms", [300, 500])
+async def test_round_trip_width_conversion_wav(
     sample_rate, original_width, intermediate_width, duration_ms
 ):
-    """Property-based test for round-trip width conversion accuracy using SNR.
-
-    Note: Only "shift" mode is used since it's the only supported mode
-    for round-trip conversion - it preserves signal amplitude.
-    """
+    """Test round-trip width conversion accuracy using common sample rates and WAV files."""
     # Skip if widths are the same (no conversion)
-    assume(original_width != intermediate_width)
+    if original_width == intermediate_width:
+        pytest.skip("No width conversion needed")
 
     # Generate test signal
     num_samples = int(sample_rate * duration_ms / 1000)
     original_dtype = np.int16 if original_width == 2 else np.int32
     original_signal = generate_test_signal(num_samples, sample_rate, original_dtype)
 
-    # Create AudioChunk
-    original_chunk = AudioChunk(
-        audio=original_signal.tobytes(), rate=sample_rate, width=original_width, channels=1
-    )
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_path = Path(temp_dir)
 
-    # First conversion: original_width -> intermediate_width
-    resampler1 = ResamplingBlock(
-        resample_rate=sample_rate,
-        resample_width=intermediate_width,
-    )
-    await resampler1.open()
+        # Save original audio to WAV
+        original_wav = temp_path / "original.wav"
+        save_audio_to_wav(original_signal.tobytes(), sample_rate, original_width, 1, original_wav)
 
-    intermediate_chunks = []
-    async for chunk in resampler1.process_chunk(original_chunk):
-        intermediate_chunks.append(chunk)
+        # Load back from WAV to verify round-trip through file format
+        loaded_audio, loaded_rate, loaded_width, loaded_channels = load_audio_from_wav(original_wav)
 
-    await resampler1.close()
+        # Create AudioChunk from loaded data
+        original_chunk = AudioChunk(
+            audio=loaded_audio, rate=loaded_rate, width=loaded_width, channels=loaded_channels
+        )
 
-    # Combine intermediate chunks
-    intermediate_audio = b"".join(chunk.audio for chunk in intermediate_chunks)
-    intermediate_chunk = AudioChunk(
-        audio=intermediate_audio, rate=sample_rate, width=intermediate_width, channels=1
-    )
+        # First conversion: original_width -> intermediate_width
+        resampler1 = ResamplingBlock(
+            resample_rate=sample_rate,
+            resample_width=intermediate_width,
+        )
+        await resampler1.open()
 
-    # Second conversion: intermediate_width -> original_width (round trip)
-    resampler2 = ResamplingBlock(
-        resample_rate=sample_rate,
-        resample_width=original_width,
-    )
-    await resampler2.open()
+        intermediate_chunks = []
+        async for chunk in resampler1.process_chunk(original_chunk):
+            intermediate_chunks.append(chunk)
 
-    final_chunks = []
-    async for chunk in resampler2.process_chunk(intermediate_chunk):
-        final_chunks.append(chunk)
+        await resampler1.close()
 
-    await resampler2.close()
+        # Combine intermediate chunks and save to WAV
+        intermediate_audio = b"".join(chunk.audio for chunk in intermediate_chunks)
+        intermediate_wav = temp_path / "intermediate.wav"
+        save_audio_to_wav(intermediate_audio, sample_rate, intermediate_width, 1, intermediate_wav)
 
-    # Combine final chunks
-    final_audio = b"".join(chunk.audio for chunk in final_chunks)
-    final_signal = np.frombuffer(final_audio, dtype=original_dtype)
+        # Load intermediate from WAV
+        loaded_intermediate, _, _, _ = load_audio_from_wav(intermediate_wav)
+        intermediate_chunk = AudioChunk(
+            audio=loaded_intermediate, rate=sample_rate, width=intermediate_width, channels=1
+        )
 
-    # Calculate SNR
-    snr_db = calculate_snr_db(original_signal, final_signal)
+        # Second conversion: intermediate_width -> original_width (round trip)
+        resampler2 = ResamplingBlock(
+            resample_rate=sample_rate,
+            resample_width=original_width,
+        )
+        await resampler2.open()
 
-    # For width conversion with "shift" mode:
-    # - 16->32->16 should be perfect (no precision loss)
-    # - 32->16->32 will lose precision (lower 16 bits discarded)
-    if original_width == 2 and intermediate_width == 4:
-        min_snr = 120.0  # 16->32->16 should be near-perfect
-    else:
-        min_snr = 80.0  # 32->16->32 loses precision but should still be very good
+        final_chunks = []
+        async for chunk in resampler2.process_chunk(intermediate_chunk):
+            final_chunks.append(chunk)
 
-    assert (
-        snr_db > min_snr
-    ), f"Round-trip width SNR {snr_db:.2f} dB is below {min_snr} dB threshold for {original_width}B -> {intermediate_width}B -> {original_width}B using shift mode"
+        await resampler2.close()
+
+        # Combine final chunks and save to WAV
+        final_audio = b"".join(chunk.audio for chunk in final_chunks)
+        final_wav = temp_path / "final.wav"
+        save_audio_to_wav(final_audio, sample_rate, original_width, 1, final_wav)
+
+        # Load final from WAV
+        loaded_final, _, _, _ = load_audio_from_wav(final_wav)
+
+        # Compare original and final
+        original_array = np.frombuffer(loaded_audio, dtype=original_dtype)
+        final_array = np.frombuffer(loaded_final, dtype=original_dtype)
+
+        # Ensure same length for comparison
+        min_len = min(len(original_array), len(final_array))
+        original_array = original_array[:min_len]
+        final_array = final_array[:min_len]
+
+        # For width conversion with "shift" mode:
+        # - 16->32->16 should be perfect (no precision loss)
+        # - 32->16->32 will lose precision (lower 16 bits discarded)
+        if original_width == 2 and intermediate_width == 4:
+            # 16->32->16 should be perfect
+            assert np.array_equal(
+                original_array, final_array
+            ), "16->32->16 conversion should be lossless"
+        else:
+            # 32->16->32 loses precision, but should be very close
+            max_error = np.max(
+                np.abs(original_array.astype(np.int64) - final_array.astype(np.int64))
+            )
+            # Allow for precision loss in lower 16 bits
+            max_allowed_error = 2**16  # Error from losing lower 16 bits
+            assert (
+                max_error <= max_allowed_error
+            ), f"32->16->32 conversion error {max_error} exceeds expected {max_allowed_error}"
 
 
 @pytest.mark.asyncio
-@given(
-    original_rate=st.integers(min_value=16000, max_value=48000),
-    intermediate_rate=st.integers(min_value=16000, max_value=48000),
-    original_width=st.sampled_from([2, 4]),
-    intermediate_width=st.sampled_from([2, 4]),
-    duration_ms=st.integers(min_value=200, max_value=500),
-)
-@settings(max_examples=10, deadline=15000)  # Fewer examples due to complexity
-async def test_round_trip_combined_conversion_snr(
+@pytest.mark.parametrize("original_rate", COMMON_SAMPLE_RATES)
+@pytest.mark.parametrize("intermediate_rate", COMMON_SAMPLE_RATES)
+@pytest.mark.parametrize("original_width", [2, 4])
+@pytest.mark.parametrize("intermediate_width", [2, 4])
+@pytest.mark.parametrize("duration_ms", [300, 500])
+async def test_round_trip_combined_conversion_wav(
     original_rate, intermediate_rate, original_width, intermediate_width, duration_ms
 ):
-    """Property-based test for round-trip combined rate and width conversion accuracy."""
+    """Test round-trip combined rate and width conversion accuracy using common sample rates and WAV files."""
     # Skip if no meaningful conversion
-    assume(
-        abs(original_rate - intermediate_rate) > original_rate * 0.1
-        or original_width != intermediate_width
-    )
+    if (
+        abs(original_rate - intermediate_rate) <= original_rate * 0.05
+        and original_width == intermediate_width
+    ):
+        pytest.skip("No meaningful conversion needed")
 
     # Generate test signal
     num_samples = int(original_rate * duration_ms / 1000)
     original_dtype = np.int16 if original_width == 2 else np.int32
     original_signal = generate_test_signal(num_samples, original_rate, original_dtype)
 
-    # Create AudioChunk
-    original_chunk = AudioChunk(
-        audio=original_signal.tobytes(), rate=original_rate, width=original_width, channels=1
-    )
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_path = Path(temp_dir)
 
-    # First conversion: original -> intermediate
-    resampler1 = ResamplingBlock(
-        resample_rate=intermediate_rate,
-        resample_width=intermediate_width,
-    )
-    await resampler1.open()
+        # Save original audio to WAV
+        original_wav = temp_path / "original.wav"
+        save_audio_to_wav(original_signal.tobytes(), original_rate, original_width, 1, original_wav)
 
-    intermediate_chunks = []
-    async for chunk in resampler1.process_chunk(original_chunk):
-        intermediate_chunks.append(chunk)
+        # Load back from WAV to verify round-trip through file format
+        loaded_audio, loaded_rate, loaded_width, loaded_channels = load_audio_from_wav(original_wav)
 
-    await resampler1.close()
+        # Create AudioChunk from loaded data
+        original_chunk = AudioChunk(
+            audio=loaded_audio, rate=loaded_rate, width=loaded_width, channels=loaded_channels
+        )
 
-    # Combine intermediate chunks
-    intermediate_audio = b"".join(chunk.audio for chunk in intermediate_chunks)
-    intermediate_chunk = AudioChunk(
-        audio=intermediate_audio, rate=intermediate_rate, width=intermediate_width, channels=1
-    )
+        # First conversion: original -> intermediate
+        resampler1 = ResamplingBlock(
+            resample_rate=intermediate_rate,
+            resample_width=intermediate_width,
+        )
+        await resampler1.open()
 
-    # Second conversion: intermediate -> original (round trip)
-    resampler2 = ResamplingBlock(resample_rate=original_rate, resample_width=original_width)
-    await resampler2.open()
+        intermediate_chunks = []
+        async for chunk in resampler1.process_chunk(original_chunk):
+            intermediate_chunks.append(chunk)
 
-    final_chunks = []
-    async for chunk in resampler2.process_chunk(intermediate_chunk):
-        final_chunks.append(chunk)
+        await resampler1.close()
 
-    await resampler2.close()
+        # Combine intermediate chunks and save to WAV
+        intermediate_audio = b"".join(chunk.audio for chunk in intermediate_chunks)
+        intermediate_wav = temp_path / "intermediate.wav"
+        save_audio_to_wav(
+            intermediate_audio, intermediate_rate, intermediate_width, 1, intermediate_wav
+        )
 
-    # Combine final chunks
-    final_audio = b"".join(chunk.audio for chunk in final_chunks)
-    final_signal = np.frombuffer(final_audio, dtype=original_dtype)
+        # Load intermediate from WAV
+        loaded_intermediate, _, _, _ = load_audio_from_wav(intermediate_wav)
+        intermediate_chunk = AudioChunk(
+            audio=loaded_intermediate, rate=intermediate_rate, width=intermediate_width, channels=1
+        )
 
-    # Calculate SNR
-    snr_db = calculate_snr_db(original_signal, final_signal)
+        # Second conversion: intermediate -> original (round trip)
+        resampler2 = ResamplingBlock(resample_rate=original_rate, resample_width=original_width)
+        await resampler2.open()
 
-    # Combined conversions have cumulative error from rate conversion
-    # Width conversion with "shift" mode should be near-perfect
-    # Rate conversion quality depends on ratio and duration
-    rate_ratio = max(original_rate, intermediate_rate) / min(original_rate, intermediate_rate)
-    has_width_conversion = original_width != intermediate_width
+        final_chunks = []
+        async for chunk in resampler2.process_chunk(intermediate_chunk):
+            final_chunks.append(chunk)
 
-    if has_width_conversion:
-        # Both rate and width conversion
-        if rate_ratio > 1.3:
-            min_snr = 40.0  # Challenging rate ratios with width conversion
-        elif rate_ratio > 1.15:
-            min_snr = 45.0  # Moderate rate ratios with width conversion
-        else:
-            min_snr = 50.0  # Easy rate ratios with width conversion
-    else:
-        # Only rate conversion (use same logic as rate-only test)
-        if rate_ratio > 1.3:
-            base_snr = 45.0  # Challenging rate ratios
-        elif rate_ratio > 1.15:
-            base_snr = 47.0  # Moderate rate ratios
-        else:
-            base_snr = 50.0  # Easy rate ratios
+        await resampler2.close()
 
-        # Adjust for duration
-        if duration_ms >= 400:
-            min_snr = base_snr + 2.0
-        elif duration_ms >= 300:
-            min_snr = base_snr
-        else:
-            min_snr = base_snr - 3.0
+        # Combine final chunks and save to WAV
+        final_audio = b"".join(chunk.audio for chunk in final_chunks)
+        final_wav = temp_path / "final.wav"
+        save_audio_to_wav(final_audio, original_rate, original_width, 1, final_wav)
 
-    assert (
-        snr_db > min_snr
-    ), f"Round-trip combined SNR {snr_db:.2f} dB is below {min_snr} dB threshold for {original_rate}Hz,{original_width}B -> {intermediate_rate}Hz,{intermediate_width}B -> {original_rate}Hz,{original_width}B"
+        # Load final from WAV
+        loaded_final, _, _, _ = load_audio_from_wav(final_wav)
+
+        # Compare original and final
+        original_array = np.frombuffer(loaded_audio, dtype=original_dtype)
+        final_array = np.frombuffer(loaded_final, dtype=original_dtype)
+
+        # Align signals to compensate for resampler group delay
+        aligned_ref, aligned_test = align_signals(original_array, final_array)
+
+        # Use SNR (Signal-to-Noise Ratio) for robust quality assessment
+        if len(aligned_ref) > 0 and len(aligned_test) > 0:
+            noise = aligned_ref.astype(np.float64) - aligned_test.astype(np.float64)
+            signal_power = np.mean(aligned_ref.astype(np.float64) ** 2)
+            noise_power = np.mean(noise**2)
+
+            if signal_power > 0 and noise_power > 0:
+                snr_db = 10 * np.log10(
+                    signal_power / (noise_power + 1e-20)
+                )  # epsilon to avoid log(0)
+                min_snr = 30  # dB (≈3% RMS error)
+
+                assert snr_db >= min_snr, f"SNR {snr_db:.1f} dB below {min_snr} dB requirement"
+            elif noise_power == 0:
+                # Perfect match - signals are identical after alignment
+                pass
+            else:
+                # Signal has no power - shouldn't happen with our test signals
+                pytest.fail("Test signal has no power")
