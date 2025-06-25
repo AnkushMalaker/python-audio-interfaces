@@ -12,13 +12,15 @@ import argparse
 import asyncio
 import logging
 import pathlib
+from typing import Optional
 
-from lib_voice_pe_decoder import ESP32TCPServer
+import numpy as np
 from wyoming.asr import Transcribe, Transcript
-from wyoming.audio import AudioStart
+from wyoming.audio import AudioChunk, AudioStart
 from wyoming.client import AsyncClient
 
 from easy_audio_interfaces import RollingFileSink
+from easy_audio_interfaces.network.network_interfaces import TCPServer
 
 DEFAULT_PORT = 8989
 SAMP_RATE = 16000
@@ -29,6 +31,88 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 ASR_URL = "tcp://192.168.0.110:8765"
+
+
+class ESP32TCPServer(TCPServer):
+    """
+    A TCP server for ESP32 devices streaming 32-bit stereo audio.
+
+    Handles the specific format used by ESPHome voice_assistant component:
+    - 32-bit little-endian samples (S32_LE)
+    - 2 channels (stereo, left/right interleaved)
+    - 16kHz sample rate
+    - Channel 0 (left) contains processed voice
+    - Channel 1 (right) is unused/muted
+
+    The server extracts the left channel and converts from 32-bit to 16-bit
+    following the official Home Assistant approach.
+    """
+
+    def __init__(self, *args, **kwargs):
+        # Set default parameters for ESP32 Voice Kit
+        kwargs.setdefault("sample_rate", 16000)
+        kwargs.setdefault("channels", 2)
+        kwargs.setdefault("sample_width", 4)  # 32-bit = 4 bytes
+        super().__init__(*args, **kwargs)
+
+    async def read(self) -> Optional[AudioChunk]:
+        """
+        Read audio data from the ESP32 TCP client.
+
+        Converts 32-bit stereo data to 16-bit mono by:
+        1. Reading raw 32-bit little-endian data
+        2. Reshaping to stereo pairs
+        3. Extracting left channel (channel 0)
+        4. Converting from 32-bit to 16-bit by right-shifting 16 bits
+
+        Returns:
+            AudioChunk with 16-bit mono audio, or None if no data/connection closed
+        """
+        # Get the raw audio chunk from the parent class
+        chunk = await super().read()
+        if chunk is None:
+            return None
+
+        raw_data = chunk.audio
+
+        # Handle empty data
+        if len(raw_data) == 0:
+            return None
+
+        # Ensure we have complete 32-bit samples (multiple of 8 bytes for stereo)
+        if len(raw_data) % 8 != 0:
+            logger.warning(
+                f"Received incomplete audio frame: {len(raw_data)} bytes, truncating to nearest complete frame"
+            )
+            raw_data = raw_data[: len(raw_data) - (len(raw_data) % 8)]
+
+        if len(raw_data) == 0:
+            return None
+
+        try:
+            # Official Home Assistant approach:
+            # 1. Parse as 32-bit little-endian integers
+            pcm32 = np.frombuffer(raw_data, dtype="<i4")  # 32-bit little-endian
+
+            # 2. Reshape to stereo pairs and extract left channel (channel 0)
+            pcm32 = pcm32.reshape(-1, 2)[:, 0]  # Take LEFT channel only
+
+            # 3. Convert from 32-bit to 16-bit by dropping padding and lower bits
+            pcm16 = (pcm32 >> 16).astype(np.int16)  # Right shift 16 bits
+
+            # Convert back to bytes
+            audio_bytes = pcm16.tobytes()
+
+            return AudioChunk(
+                audio=audio_bytes,
+                rate=self._sample_rate,
+                channels=1,  # Output is mono (left channel only)
+                width=2,  # 16-bit = 2 bytes
+            )
+
+        except Exception as e:
+            logger.error(f"Error processing ESP32 audio data: {e}")
+            return None
 
 
 async def transcription_printer(client: AsyncClient):
