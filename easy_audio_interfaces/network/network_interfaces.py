@@ -371,6 +371,8 @@ class TCPServer(AudioSource):
 
     async def iter_frames(self) -> AsyncGenerator[AudioChunk, None]:
         """Iterate over audio frames from the TCP client."""
+        if not self._is_running:
+            raise RuntimeError("TCP server is not running. Call 'open()' first.")
         while self._is_running:
             chunk = await self.read()
             if chunk is None:
