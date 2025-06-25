@@ -1,0 +1,96 @@
+substitutions:
+  device_name: voice-pe-tcp
+  wifi_ssid: !secret wifi_ssid
+  wifi_pwd: !secret wifi_password
+  server_ip: !secret relay_ip_address
+  server_port: "8989"                   #  ← keep in sync with Python
+
+esphome:
+  name: ${device_name}
+  friendly_name: Voice PE TCP Streamer
+  includes:
+    - tcp_stream.h                      # header with <lwip/sockets.h>
+
+esp32:
+  board: esp32-s3-devkitc-1
+  framework:
+    type: esp-idf
+
+logger:
+  level: INFO
+  baud_rate: 115200 # Change to 0 to disable serial output
+
+wifi:
+  ssid:  ${wifi_ssid}
+  password: ${wifi_pwd}
+
+  # Start the microphone as soon as the network is up
+  on_connect:
+    then:
+      - logger.log:
+          tag: tcp
+          level: INFO
+          format: "Wi-Fi connected – starting microphone.capture"
+      - microphone.capture
+
+api:
+
+# ─────────── I²S bus and microphone ───────────
+i2s_audio:
+  id: i2s_input
+  i2s_lrclk_pin:
+    number: GPIO14
+  i2s_bclk_pin:
+    number: GPIO13
+
+microphone:
+  - platform: i2s_audio
+    id: mic_in
+    adc_type: external
+    i2s_audio_id: i2s_input
+    i2s_din_pin: GPIO15
+    i2s_mode: secondary
+    sample_rate: 16000          # 16-kHz / 32-bit / mono
+    bits_per_sample: 32bit
+    channel: stereo
+    # bits_per_channel: 16bit # What is this?
+
+    on_data:
+      then:
+        - lambda: |-
+            static int sockfd = -1;
+            static bool announced = false;   // one-time "streaming" log
+
+            // This is 512 at 16bit, mono, 16kHz - 256 samples at 2 bytes per sample
+            // 16kHz -> 16000/256 -> 62.5 frames per second
+            ESP_LOGI("dbg", "buffer bytes=%d", (int)x.size());
+            // (Re)open TCP socket if needed
+            if (sockfd < 0) {
+              sockfd = lwip_socket(AF_INET, SOCK_STREAM, 0);
+              if (sockfd >= 0) {
+                struct sockaddr_in dest {};
+                dest.sin_family = AF_INET;
+                dest.sin_port   = htons(atoi("${server_port}"));
+                inet_pton(AF_INET, "${server_ip}", &dest.sin_addr);
+                lwip_connect(sockfd, (struct sockaddr *)&dest, sizeof(dest));
+                ESP_LOGI("tcp", "Socket %d connected to %s:%s",
+                         sockfd, "${server_ip}", "${server_port}");
+              } else {
+                ESP_LOGE("tcp", "socket() failed, errno=%d", errno);
+              }
+            }
+
+            // Send raw audio data
+            if (sockfd >= 0) {
+              ssize_t n = lwip_send(sockfd, x.data(), x.size(), 0);
+              if (n < 0) {
+                ESP_LOGE("tcp", "send() errno=%d - closing & retrying", errno);
+                lwip_close(sockfd);
+                sockfd = -1;
+                announced = false;
+              } else if (!announced) {
+                ESP_LOGI("tcp", "Streaming raw audio data…");
+                announced = true;
+              }
+              ESP_LOGV("tcp", "Sent %d bytes", (int)n);
+            }
