@@ -184,19 +184,15 @@ class SocketClient(AudioSink):
     """
     A class that represents a WebSocket audio sink streamer.
 
-    This class allows for sending audio data over a WebSocket connection. It handles
-    client connections, processes incoming audio frames, and manages the WebSocket server.
-
     Attributes:
         sample_rate (int): The sample rate of the audio (default is 16000 Hz).
         channels (int): The number of audio channels (default is 1).
-        port (int): The port on which the WebSocket server listens (default is 8080).
-        host (str): The host address for the WebSocket server (default is "localhost").
+        uri (str): The WebSocket URI to connect to (default is "ws://localhost:8080").
 
     Methods:
         open(): Connects to the WebSocket server and waits for a client connection.
-        write(data: NumpyFrame): Sends a frame of audio data to the WebSocket server.
-        write_from(input_stream: AsyncIterable[NumpyFrame]): Writes audio data from an input stream to the WebSocket server.
+        write(data: AudioChunk): Sends a frame of audio data to the WebSocket server.
+        write_from(input_stream: AsyncIterable[AudioChunk]): Writes audio data from an input stream to the WebSocket server.
         close(): Closes the WebSocket connection and cleans up resources.
 
     """
@@ -205,13 +201,11 @@ class SocketClient(AudioSink):
         self,
         sample_rate: int = 16000,
         channels: int = 1,
-        port: int = 8080,
-        host: str = "localhost",
+        uri: str = "ws://localhost:8080",
     ):
         self._sample_rate = sample_rate
         self._channels = channels
-        self._port = port
-        self._host = host
+        self._uri = uri
         self.websocket = None
 
     @property
@@ -223,9 +217,8 @@ class SocketClient(AudioSink):
         return self._channels
 
     async def open(self):
-        uri = f"ws://{self._host}:{self._port}"
-        self.websocket = await websockets.connect(uri)
-        logger.info(f"Connected to {uri}")
+        self.websocket = await websockets.connect(self._uri)
+        logger.info(f"Connected to {self._uri}")
 
     async def close(self):
         if self.websocket:

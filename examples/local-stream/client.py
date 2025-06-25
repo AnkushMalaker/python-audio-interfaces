@@ -8,7 +8,7 @@ logging.basicConfig(level=logging.INFO)
 
 
 async def client():
-    client = SocketClient(host="localhost", port=4369)
+    client = SocketClient(uri="ws://localhost:4369")
     async with InputMicStream() as mic_source:
         async with client as client:
             async for chunk in mic_source:

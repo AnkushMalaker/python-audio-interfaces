@@ -59,7 +59,7 @@ async def test_socket_connection():
 
     async with SocketServer(port=test_port, sample_rate=SINE_SAMPLE_RATE, channels=1) as receiver:
         async with SocketClient(
-            port=test_port, sample_rate=SINE_SAMPLE_RATE, channels=1
+            uri=f"ws://localhost:{test_port}", sample_rate=SINE_SAMPLE_RATE, channels=1
         ) as streamer:
             # Allow time for connection
             await asyncio.sleep(0.1)
@@ -95,7 +95,7 @@ async def test_socket_streaming():
 
     async with SocketServer(port=test_port, sample_rate=SINE_SAMPLE_RATE, channels=1) as receiver:
         async with SocketClient(
-            port=test_port, sample_rate=SINE_SAMPLE_RATE, channels=1
+            uri=f"ws://localhost:{test_port}", sample_rate=SINE_SAMPLE_RATE, channels=1
         ) as streamer:
             # Allow time for connection
             await asyncio.sleep(0.1)
@@ -126,13 +126,13 @@ async def test_socket_server_multiple_connections():
     async with SocketServer(port=test_port, sample_rate=SINE_SAMPLE_RATE, channels=1) as receiver:
         # Create first connection
         async with SocketClient(
-            port=test_port, sample_rate=SINE_SAMPLE_RATE, channels=1
+            uri=f"ws://localhost:{test_port}", sample_rate=SINE_SAMPLE_RATE, channels=1
         ) as streamer1:
             await asyncio.sleep(0.1)
 
             # Try to create second connection
             async with SocketClient(
-                port=test_port, sample_rate=SINE_SAMPLE_RATE, channels=1
+                uri=f"ws://localhost:{test_port}", sample_rate=SINE_SAMPLE_RATE, channels=1
             ) as streamer2:
                 await asyncio.sleep(0.1)
 
@@ -148,7 +148,7 @@ async def test_socket_heartbeat():
     test_port = BASE_TEST_PORT + 4
     async with SocketServer(port=test_port, sample_rate=SINE_SAMPLE_RATE, channels=1) as receiver:
         async with SocketClient(
-            port=test_port, sample_rate=SINE_SAMPLE_RATE, channels=1
+            uri=f"ws://localhost:{test_port}", sample_rate=SINE_SAMPLE_RATE, channels=1
         ) as streamer:
             # Allow time for connection and heartbeat
             await asyncio.sleep(6)  # Wait for at least one heartbeat cycle (5s)
@@ -170,5 +170,5 @@ async def test_socket_error_handling():
 
     # Test connection to non-existent receiver
     with pytest.raises((ConnectionRefusedError, OSError)):
-        async with SocketClient(port=test_port) as streamer:
+        async with SocketClient(uri=f"ws://localhost:{test_port}") as streamer:
             pass
