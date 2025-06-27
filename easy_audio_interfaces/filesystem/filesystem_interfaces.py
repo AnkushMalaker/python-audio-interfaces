@@ -132,6 +132,10 @@ class LocalFileStreamer(AudioSource):
             except StopAsyncIteration:
                 break
 
+    @property
+    def file_path(self) -> Path:
+        return self._file_path
+
 
 class LocalFileSink(AudioSink):
     def __init__(
@@ -171,6 +175,10 @@ class LocalFileSink(AudioSink):
             raise RuntimeError("File is not open. Call 'open()' first.")
         self._file_handle.writeframes(data.audio)
         logger.debug(f"Wrote {len(data.audio)} bytes to {self._file_path}.")
+
+    @property
+    def file_path(self) -> Path:
+        return self._file_path
 
     async def write_from(self, input_stream: AsyncIterable[AudioChunk] | Iterable[AudioChunk]):
         total_frames = 0
@@ -243,6 +251,10 @@ class RollingFileSink(AudioSink):
     @property
     def sample_rate(self) -> int | float:
         return self._sample_rate
+
+    @property
+    def directory(self) -> Path:
+        return self._directory
 
     @property
     def channels(self) -> int:
