@@ -238,13 +238,17 @@ class RollingFileSink(AudioSink):
         self._channels = channels
         self._sample_width = sample_width
 
-        # Calculate the maximum samples per segment
-        self._max_samples_per_segment = int(segment_duration_seconds * sample_rate)
+        # Calculate the target samples per segment and use rechunking for exact durations
+        target_samples_per_segment = int(segment_duration_seconds * sample_rate)
+
+        # Import here to avoid circular imports
+        from easy_audio_interfaces.audio_interfaces import RechunkingBlock
+
+        self._rechunker = RechunkingBlock(chunk_size_samples=target_samples_per_segment)
 
         # Track current file state
         self._current_sink: Optional[LocalFileSink] = None
         self._current_file_path: Optional[Path] = None
-        self._current_samples_written: int = 0
         self._file_counter: int = 0
         self.generate_filename: Callable[[], str] = self._generate_filename
 
@@ -284,9 +288,7 @@ class RollingFileSink(AudioSink):
         )
         await self._current_sink.open()
 
-        self._current_samples_written = 0
         self._file_counter += 1
-
         logger.info(f"Started new rolled file: {self._current_file_path}")
 
     async def open(self):
@@ -300,6 +302,9 @@ class RollingFileSink(AudioSink):
         if not self._directory.is_dir():
             raise RuntimeError(f"Path exists but is not a directory: {self._directory}")
 
+        # Initialize the rechunker
+        await self._rechunker.open()
+
         # Start the first file
         await self._roll_file()
         logger.info(f"Opened rolling file sink in directory: {self._directory}")
@@ -308,21 +313,17 @@ class RollingFileSink(AudioSink):
         if self._current_sink is None:
             raise RuntimeError("File sink is not open. Call 'open()' first.")
 
-        # Calculate how many samples this chunk contains
-        chunk_samples = len(data.audio) // (self._sample_width * self._channels)
+        # Use the rechunker to get exactly-sized chunks
+        async for segment_chunk in self._rechunker.process_chunk(data):
+            # Each chunk from the rechunker represents exactly one file segment
+            await self._current_sink.write(segment_chunk)
+            await self._current_sink.close()
 
-        # Check if adding this chunk would exceed our segment limit
-        if self._current_samples_written + chunk_samples > self._max_samples_per_segment:
-            # Roll to a new file before writing this chunk
+            # Log the completed file
+            logger.info(f"Completed file segment: {self._current_file_path}")
+
+            # Start a new file for the next segment
             await self._roll_file()
-
-        # Write the entire chunk to current file
-        await self._current_sink.write(data)
-        self._current_samples_written += chunk_samples
-
-        logger.debug(
-            f"Wrote {len(data.audio)} bytes ({chunk_samples} samples) to {self._current_file_path}"
-        )
 
     async def write_from(self, input_stream: AsyncIterable[AudioChunk] | Iterable[AudioChunk]):
         total_frames = 0
@@ -342,10 +343,26 @@ class RollingFileSink(AudioSink):
         )
 
     async def close(self):
+        # Flush any remaining data from the rechunker
+        if self._rechunker._buffer and self._current_sink:
+            # Process any remaining buffered data
+            remaining_chunk = AudioChunk(
+                audio=self._rechunker._buffer,
+                rate=int(self._sample_rate),
+                width=self._sample_width,
+                channels=self._channels,
+            )
+            await self._current_sink.write(remaining_chunk)
+            logger.info(f"Wrote final partial segment: {self._current_file_path}")
+
         if self._current_sink:
             await self._current_sink.close()
             self._current_sink = None
             logger.info(f"Closed final rolled file: {self._current_file_path}")
+
+        # Close the rechunker
+        await self._rechunker.close()
+
         logger.info(
             f"Closed rolling file sink. Created {self._file_counter} files in {self._directory}"
         )
