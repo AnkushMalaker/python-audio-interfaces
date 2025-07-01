@@ -1,4 +1,4 @@
-from typing import AsyncIterator, Optional, Protocol, Type
+from typing import AsyncGenerator, AsyncIterator, Optional, Protocol, Type
 
 from wyoming.audio import AudioChunk
 
@@ -82,21 +82,10 @@ class AudioSink(Protocol):
 class ProcessingBlock(Protocol):
     """Abstract processing block that can be used to process audio data."""
 
-    def process(self, input_stream: AudioStream) -> AudioStream:
+    # async def process(self, input_stream: AudioStream) -> AudioStream: ...
+
+    def process_chunk(self, chunk: AudioChunk) -> AsyncGenerator[AudioChunk, None]:
         ...
-
-    async def process_chunk(self, chunk: AudioChunk) -> AsyncIterator[AudioChunk]:
-        """Convenience method for processing a single AudioChunk.
-
-        Default implementation falls back to .process() method.
-        Blocks that care about performance can override this with a real fast-path.
-        """
-
-        async def _single() -> AsyncIterator[AudioChunk]:
-            yield chunk
-
-        async for out in self.process(_single()):
-            yield out
 
     async def open(self):
         ...

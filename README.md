@@ -26,6 +26,30 @@ async with SocketReceiver() as receiver, LocalFileSink("output.wav") as sink:
     await sink.write_from(resampled_stream)
 ```
 
+#### Advanced Usage: Manual Chunk Processing with ResamplingBlock
+
+For more control over individual audio chunks, you can use `process_chunk` and `process_chunk_last`:
+
+```python
+from easy_audio_interfaces import ResamplingBlock
+from wyoming.audio import AudioChunk
+
+resampler = ResamplingBlock(resample_rate=16000)
+await resampler.open()
+
+# Process individual chunks
+for chunk in audio_chunks:
+    async for resampled_chunk in resampler.process_chunk(chunk):
+        # Handle each resampled chunk
+        process_audio(resampled_chunk)
+
+# Important: Flush remaining buffered samples
+async for final_chunk in resampler.process_chunk_last():
+    process_audio(final_chunk)
+
+await resampler.close()
+```
+
 ## Installation
 
 ### From PyPI
@@ -71,6 +95,8 @@ uv add "easy-audio-interfaces[local-audio]"
 #### Processing Blocks
 - **CollectorBlock**: Collects audio samples for a specified duration
 - **ResamplingBlock**: Resamples audio to a different sample rate
+  - `process_chunk_last()`: Flushes remaining buffered samples from the resampler.
+    Call this after processing all chunks to ensure no audio data is lost due to internal buffering.
 - **RechunkingBlock**: Rechunks audio data into fixed-size chunks
 
 #### Voice Activity Detection
