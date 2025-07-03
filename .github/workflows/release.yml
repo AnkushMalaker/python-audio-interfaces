@@ -44,16 +44,16 @@ jobs:
         id: local
         shell: bash
         run: |
-          version=$(grep -Po '^(version\s*=\s*)"\K[^"']+' pyproject.toml)
-          echo "local_version=$version" >> "$GITHUB_OUTPUT"
+          local_version=$(grep -Po '^version\s*=\s*"\K[^"]+' pyproject.toml)
+          echo "local_version=$local_version" >> "$GITHUB_OUTPUT"
 
       - name: Fetch published version from PyPI
         id: remote
         shell: bash
         run: |
           sudo apt-get update -y && sudo apt-get install -y jq
-          version=$(curl -s https://pypi.org/pypi/easy-audio-interfaces/json | jq -r '.info.version')
-          echo "remote_version=$version" >> "$GITHUB_OUTPUT"
+          remote_version=$(curl -s https://pypi.org/pypi/easy-audio-interfaces/json | jq -r '.info.version')
+          echo "remote_version=$remote_version" >> "$GITHUB_OUTPUT"
 
       - name: Determine if version changed
         id: set-output
@@ -80,7 +80,9 @@ jobs:
           python-version-file: pyproject.toml
 
       - name: Build sdists & wheels
+        # --no-sources = verify nothing is fetched at build time
         run: uv build --sdist --wheel --no-sources
 
       - name: Publish to PyPI
+        # With Trusted Publishing no token is required
         run: uv publish --check-url https://pypi.org/project/easy-audio-interfaces/
