@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from io import BytesIO
 from typing import AsyncGenerator
 
 import numpy as np
@@ -10,8 +11,10 @@ from wyoming.audio import AudioChunk, AudioFormat
 from easy_audio_interfaces.base_interfaces import (
     AudioSink,
     AudioSource,
+    ChunkedWavAudioSource,
     ProcessingBlock,
 )
+from easy_audio_interfaces.streaming import WaveFileStreamer
 from easy_audio_interfaces.types.common import AudioStream
 
 logger = logging.getLogger(__name__)
@@ -27,6 +30,31 @@ class StreamFromCommand(AudioSource):
 
     async def close(self):
         ...
+
+
+class SourceFromBytesIO(ChunkedWavAudioSource):
+    def __init__(
+        self,
+        bytes_io: BytesIO,
+        *,
+        chunk_size_ms: int | None = None,
+        chunk_size_samples: int | None = None,
+    ):
+        super().__init__(chunk_size_ms=chunk_size_ms, chunk_size_samples=chunk_size_samples)
+        self._bytes_io = bytes_io
+
+    def _create_wave_streamer(self) -> WaveFileStreamer:
+        return WaveFileStreamer(self._bytes_io)
+
+    async def open(self):
+        await super().open()
+        logger.info(
+            f"Opened BytesIO stream, Sample rate: {self.sample_rate}, Channels: {self.channels}"
+        )
+
+    async def close(self):
+        await super().close()
+        logger.info("Closed BytesIO stream")
 
 
 class ResamplingBlock(ProcessingBlock):
