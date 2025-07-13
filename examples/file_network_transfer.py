@@ -16,8 +16,6 @@ async def sender(input_file: str, host: str = "localhost", port: int = 8080):
         async with SocketClient(
             sample_rate=file_source.sample_rate,
             channels=file_source.channels,
-            host=host,
-            port=port,
         ) as streamer:
             await streamer.write_from(file_source)
     logger.info(f"Finished sending file to {host}:{port}")
