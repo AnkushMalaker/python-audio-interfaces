@@ -1,17 +1,21 @@
 import wave
 from pathlib import Path
+from typing import BinaryIO
 
 from wyoming.audio import AudioChunk
 
 from easy_audio_interfaces.types.common import PathLike
 
 
-def audio_chunk_from_file(file_path: PathLike) -> AudioChunk:
-    file_path = Path(file_path)
-    if not file_path.exists():
-        raise FileNotFoundError(f"File not found: {file_path}")
+def audio_chunk_from_source(source: PathLike | BinaryIO) -> AudioChunk:
+    """Load entire audio from file or BytesIO into a single AudioChunk. Use WaveFileStreamer for streaming."""
+    if isinstance(source, (str, Path)):
+        file_path = Path(source)
+        if not file_path.exists():
+            raise FileNotFoundError(f"File not found: {file_path}")
+        source = str(file_path)
 
-    with wave.open(str(file_path), "rb") as wav_file:
+    with wave.open(source, "rb") as wav_file:  # type: ignore
         audio_data = wav_file.readframes(wav_file.getnframes())
         return AudioChunk(
             audio=audio_data,

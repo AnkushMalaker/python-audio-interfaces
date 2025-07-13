@@ -6,14 +6,14 @@ from typing import AsyncGenerator, AsyncIterable, Callable, Iterable, Optional, 
 
 from wyoming.audio import AudioChunk
 
-from easy_audio_interfaces.base_interfaces import AudioSink, AudioSource
+from easy_audio_interfaces.base_interfaces import AudioSink, ChunkedWavAudioSource
+from easy_audio_interfaces.streaming import WaveFileStreamer
 from easy_audio_interfaces.types.common import PathLike
-from easy_audio_interfaces.utils import audio_chunk_from_file
 
 logger = logging.getLogger(__name__)
 
 
-class LocalFileStreamer(AudioSource):
+class LocalFileStreamer(ChunkedWavAudioSource):
     def __init__(
         self,
         file_path: PathLike,
@@ -21,94 +21,28 @@ class LocalFileStreamer(AudioSource):
         chunk_size_ms: int | None = None,
         chunk_size_samples: int | None = None,
     ):
-        if chunk_size_ms is None and chunk_size_samples is None:
-            raise ValueError("Either chunk_size_ms or chunk_size_samples must be provided.")
-        if chunk_size_ms is not None and chunk_size_samples is not None:
-            raise ValueError("Only one of chunk_size_ms or chunk_size_samples can be provided.")
-
-        self._chunk_size_ms = chunk_size_ms
-        self._chunk_size_samples = chunk_size_samples
-        if not chunk_size_ms and not chunk_size_samples:
-            self._chunk_size_samples = 512
-
+        super().__init__(chunk_size_ms=chunk_size_ms, chunk_size_samples=chunk_size_samples)
         self._file_path = Path(file_path)
-        self._audio_segment: Optional[AudioChunk] = None
 
-    @property
-    def sample_rate(self) -> int:
-        return self._audio_segment.rate if self._audio_segment else 0
-
-    @property
-    def channels(self) -> int:
-        return self._audio_segment.channels if self._audio_segment else 0
+    def _create_wave_streamer(self) -> WaveFileStreamer:
+        if not self._file_path.exists():
+            raise FileNotFoundError(f"File not found: {self._file_path}")
+        return WaveFileStreamer(self._file_path)
 
     async def open(self):
-        # @optimization: Can convert this to an iterator maybe for better efficiency?
-        self._audio_segment = audio_chunk_from_file(self._file_path)
-        if self._audio_segment is None:
-            raise RuntimeError(f"Failed to open file: {self._file_path}")
+        await super().open()
         logger.info(
-            f"Opened file: {self._file_path}, Sample rate: {self._audio_segment.rate}, Channels: {self._audio_segment.channels}"
+            f"Opened file: {self._file_path}, Sample rate: {self.sample_rate}, Channels: {self.channels}"
         )
 
     async def read(self) -> AudioChunk:
-        if self._audio_segment is None:
-            raise RuntimeError("File is not open. Call 'open()' first.")
-
-        if self._audio_segment.samples == 0:
+        result = await super().read()
+        if result is None:
             raise StopAsyncIteration
-
-        # If we're using millisecond-based chunks
-        if self._chunk_size_ms is not None:
-            assert self._audio_segment is not None
-            # Calculate bytes per millisecond
-            bytes_per_ms = (
-                self._audio_segment.rate * self._audio_segment.width * self._audio_segment.channels
-            ) // 1000
-            chunk_size_bytes = self._chunk_size_ms * bytes_per_ms
-
-            chunk = self._audio_segment.audio[:chunk_size_bytes]
-            self._audio_segment = AudioChunk(
-                audio=self._audio_segment.audio[chunk_size_bytes:],
-                rate=self._audio_segment.rate,
-                width=self._audio_segment.width,
-                channels=self._audio_segment.channels,
-            )
-            return AudioChunk(
-                audio=chunk,
-                rate=self._audio_segment.rate,
-                width=self._audio_segment.width,
-                channels=self._audio_segment.channels,
-            )
-
-        # If we're using sample-based chunks
-        if self._chunk_size_samples is not None:
-            # Calculate bytes for the number of samples
-            chunk_size_bytes = (
-                self._chunk_size_samples * self._audio_segment.width * self._audio_segment.channels
-            )
-
-            chunk = self._audio_segment.audio[:chunk_size_bytes]
-            self._audio_segment = AudioChunk(
-                audio=self._audio_segment.audio[chunk_size_bytes:],
-                rate=self._audio_segment.rate,
-                width=self._audio_segment.width,
-                channels=self._audio_segment.channels,
-            )
-            return AudioChunk(
-                audio=chunk,
-                rate=self._audio_segment.rate,
-                width=self._audio_segment.width,
-                channels=self._audio_segment.channels,
-            )
-
-        raise RuntimeError(
-            "No chunk size provided. This shouldn't happen. We should default to 512 samples."
-        )
+        return result
 
     async def close(self):
-        if self._audio_segment:
-            self._audio_segment = None
+        await super().close()
         logger.info(f"Closed file: {self._file_path}")
 
     async def __aenter__(self) -> "LocalFileStreamer":
@@ -117,9 +51,9 @@ class LocalFileStreamer(AudioSource):
 
     async def __aexit__(
         self,
-        exc_type: Optional[Type[BaseException]],
-        exc_value: Optional[BaseException],
-        traceback: Optional[Type[BaseException]],
+        _exc_type: Optional[Type[BaseException]],
+        _exc_value: Optional[BaseException],
+        _traceback: Optional[Type[BaseException]],
     ):
         await self.close()
 
@@ -209,9 +143,9 @@ class LocalFileSink(AudioSink):
 
     async def __aexit__(
         self,
-        exc_type: Optional[Type[BaseException]],
-        exc_value: Optional[BaseException],
-        traceback: Optional[Type[BaseException]],
+        _exc_type: Optional[Type[BaseException]],
+        _exc_value: Optional[BaseException],
+        _traceback: Optional[Type[BaseException]],
     ):
         await self.close()
 
@@ -373,8 +307,8 @@ class RollingFileSink(AudioSink):
 
     async def __aexit__(
         self,
-        exc_type: Optional[Type[BaseException]],
-        exc_value: Optional[BaseException],
-        traceback: Optional[Type[BaseException]],
+        _exc_type: Optional[Type[BaseException]],
+        _exc_value: Optional[BaseException],
+        _traceback: Optional[Type[BaseException]],
     ):
         await self.close()

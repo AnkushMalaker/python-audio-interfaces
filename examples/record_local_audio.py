@@ -21,12 +21,12 @@ async def record_local_audio(duration: int = 30, output_dir: str | Path = "recor
     output_dir.mkdir(parents=True, exist_ok=True)
     # p = PyAudioInterface()
     # print(p.list_input_devices())
-    mic_source = InputMicStream(device_index=2)
+    mic_source = InputMicStream()
 
     file_sink = RollingFileSink(
         directory=output_dir,
         prefix="",
-        segment_duration_seconds=5,
+        segment_duration_seconds=60,
         sample_rate=mic_source.sample_rate,
         channels=mic_source.channels,
     )
