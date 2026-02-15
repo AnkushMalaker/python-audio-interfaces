@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import wave
 from datetime import datetime
@@ -98,16 +99,20 @@ class LocalFileSink(AudioSink):
         if not self._file_path.parent.exists():
             raise RuntimeError(f"Parent directory does not exist: {self._file_path.parent}")
 
-        self._file_handle = wave.open(str(self._file_path), "wb")
-        self._file_handle.setnchannels(self._channels)
-        self._file_handle.setsampwidth(self._sample_width)
-        self._file_handle.setframerate(self._sample_rate)
+        def _open_wave():
+            fh = wave.open(str(self._file_path), "wb")
+            fh.setnchannels(self._channels)
+            fh.setsampwidth(self._sample_width)
+            fh.setframerate(self._sample_rate)
+            return fh
+
+        self._file_handle = await asyncio.to_thread(_open_wave)
         logger.info(f"Opened file for writing: {self._file_path}")
 
     async def write(self, data: AudioChunk):
         if self._file_handle is None:
             raise RuntimeError("File is not open. Call 'open()' first.")
-        self._file_handle.writeframes(data.audio)
+        await asyncio.to_thread(self._file_handle.writeframes, data.audio)
         logger.debug(f"Wrote {len(data.audio)} bytes to {self._file_path}.")
 
     @property
@@ -133,7 +138,7 @@ class LocalFileSink(AudioSink):
 
     async def close(self):
         if self._file_handle:
-            self._file_handle.close()
+            await asyncio.to_thread(self._file_handle.close)
             self._file_handle = None
         logger.info(f"Closed file: {self._file_path}")
 
