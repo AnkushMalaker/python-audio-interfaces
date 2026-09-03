@@ -299,6 +299,7 @@ class ResamplingBlock(ProcessingBlock):
                     f"{self._resample_channels}. Only mono ↔ stereo conversions are supported."
                 )
 
+        converted_width: NDArray[np.floating] | NDArray[np.signedinteger]
         if chunk.width == self._resample_width:
             converted_width = audio_array
         elif chunk.width == 4 and self._resample_width == 2:

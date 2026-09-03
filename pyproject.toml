@@ -59,6 +59,17 @@ exclude = '''
 line-length = 100
 target-version = ["py311"]
 
+[tool.coverage.run]
+branch = true
+source = ["easy_audio_interfaces"]
+omit = [
+  "easy_audio_interfaces/extras/friend_bluetooth.py",
+  "easy_audio_interfaces/tests/*",
+]
+
+[tool.coverage.report]
+show_missing = true
+
 [tool.mypy]
 files = ["easy_audio_interfaces"]
 
