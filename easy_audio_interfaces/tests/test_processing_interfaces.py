@@ -344,7 +344,7 @@ async def test_resampling_block_extreme_ratios():
 
 @pytest.mark.asyncio
 async def test_resampling_block_process_chunk():
-    """Test the new process_chunk method with ResamplingBlock."""
+    """Intent: manual chunk processing plus finalization preserves duration."""
     duration_ms = 100
     input_rate = 16000
     output_rate = 48000
@@ -356,6 +356,8 @@ async def test_resampling_block_process_chunk():
     # Test process_chunk method
     output_chunks = []
     async for output_chunk in resampler.process_chunk(audio_chunk):
+        output_chunks.append(output_chunk)
+    async for output_chunk in resampler.process_chunk_last():
         output_chunks.append(output_chunk)
 
     await resampler.close()
@@ -376,7 +378,7 @@ async def test_resampling_block_process_chunk():
 
 @pytest.mark.asyncio
 async def test_resampling_block_process_chunk_stereo():
-    """Test process_chunk with stereo audio."""
+    """Intent: manual conversion preserves stereo topology through finalization."""
     duration_ms = 100
     input_rate = 44100
     output_rate = 48000
@@ -390,6 +392,8 @@ async def test_resampling_block_process_chunk_stereo():
 
     output_chunks = []
     async for output_chunk in resampler.process_chunk(audio_chunk):
+        output_chunks.append(output_chunk)
+    async for output_chunk in resampler.process_chunk_last():
         output_chunks.append(output_chunk)
 
     await resampler.close()
@@ -433,7 +437,7 @@ async def test_rechunking_block_process_chunk():
 
 @pytest.mark.asyncio
 async def test_process_chunk_vs_process_consistency():
-    """Test that process_chunk produces the same results as process for single chunks."""
+    """Intent: manual and stream adapters share one conversion implementation."""
     duration_ms = 100
     input_rate = 22050
     output_rate = 44100
@@ -446,8 +450,9 @@ async def test_process_chunk_vs_process_consistency():
     process_chunk_results = []
     async for output_chunk in resampler.process_chunk(audio_chunk):
         process_chunk_results.append(output_chunk)
+    async for output_chunk in resampler.process_chunk_last():
+        process_chunk_results.append(output_chunk)
 
-    # Reset resampler state since process_chunk finalizes the ResampleStream
     await resampler.close()
 
     resampler = ResamplingBlock(resample_rate=output_rate)
@@ -469,6 +474,28 @@ async def test_process_chunk_vs_process_consistency():
         assert len(chunk1.audio) == len(chunk2.audio)
         # Audio data should be identical (or very close due to floating point)
         assert chunk1.audio == chunk2.audio
+
+
+@pytest.mark.asyncio
+async def test_process_chunk_keeps_filter_state_across_packet_boundaries():
+    """Intent: incremental block use must sound identical regardless of packet size."""
+
+    source = create_sine_wave_audio_chunk(2_000, SINE_FREQUENCY, 16_000)
+
+    reference = bytearray()
+    reference_resampler = ResamplingBlock(resample_rate=24_000)
+    async for output in reference_resampler.process(async_generator(source, 2_000)):
+        reference.extend(output.audio)
+
+    packetized = bytearray()
+    packet_resampler = ResamplingBlock(resample_rate=24_000)
+    async for packet in async_generator(source, 20):
+        async for output in packet_resampler.process_chunk(packet):
+            packetized.extend(output.audio)
+    async for output in packet_resampler.process_chunk_last():
+        packetized.extend(output.audio)
+
+    assert packetized == reference
 
 
 @pytest.mark.asyncio
@@ -769,7 +796,7 @@ async def test_resampling_block_no_conversion_needed():
 
 @pytest.mark.asyncio
 async def test_resampling_block_process_chunk_with_conversions():
-    """Test process_chunk method with channel and width conversions."""
+    """Intent: final output also receives requested channel and width conversions."""
     duration_ms = 100
     input_rate = 22050
     output_rate = 44100
@@ -785,6 +812,8 @@ async def test_resampling_block_process_chunk_with_conversions():
 
     output_chunks = []
     async for output_chunk in resampler.process_chunk(audio_chunk):
+        output_chunks.append(output_chunk)
+    async for output_chunk in resampler.process_chunk_last():
         output_chunks.append(output_chunk)
 
     await resampler.close()

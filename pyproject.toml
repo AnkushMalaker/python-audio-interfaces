@@ -1,6 +1,6 @@
 [project]
 name = "easy-audio-interfaces"
-version = "0.8.0"
+version = "0.9.0"
 description = "Easy Audio Interfaces is a Python library that provides a simple and flexible way to work with audio streams, including recording, playback, network transfer, and processing."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -8,11 +8,8 @@ authors = [
   { name = "Ankush Malaker", email = "43288948+AnkushMalaker@users.noreply.github.com" },
 ]
 dependencies = [
-  "fire>=0.5.0,<0.6.0",
-  "rich>=13.5.3,<14.0.0",
-  "opuslib>=3.0.1,<4.0.0",
   "websockets>=14.0",
-  "scipy>=1.13.1",
+  "numpy>=1.26",
   "soxr>=0.5.0.post1",
 ]
 optional-dependencies = { stt = [
@@ -22,14 +19,14 @@ optional-dependencies = { stt = [
   "torchaudio",
 ], bluetooth = [
   "bleak",
+  "opuslib>=3.0.1,<4.0.0",
 ], local-audio = [
   "pyaudio",
-], wyoming = [
-  "wyoming>=1.6.1",
 ], test = [
   "pytest",
   "pytest-asyncio",
   "hypothesis>=6.135.12",
+  "scipy>=1.13.1",
 ] }
 
 
@@ -76,7 +73,6 @@ module = [
   "soxr.*",
   "bleak.*",
   "pyaudio.*",
-  "wyoming.*",
 ]
 ignore_missing_imports = true
 

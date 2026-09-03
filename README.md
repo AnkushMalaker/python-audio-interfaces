@@ -29,20 +29,13 @@ async with LocalFileStreamer("input.wav", chunk_size_ms=20) as source:
 
 `AudioChunk` and `AudioFormat` are native, protocol-neutral PCM types. A chunk contains raw
 interleaved audio bytes plus its sample rate, bytes per sample, channel count, and optional
-timestamp. Construction validates the format and rejects partial sample frames.
-
-Wyoming is not required by the library. Applications that intentionally speak the Wyoming
-protocol can install the `wyoming` extra and convert a native chunk at the boundary:
-
-```python
-from easy_audio_interfaces.integrations.wyoming import audio_chunk_to_event
-
-await client.write_event(audio_chunk_to_event(chunk))
-```
+timestamp. Construction validates the format and rejects partial sample frames. Protocol and
+transport adapters are intentionally outside this library.
 
 #### Advanced Usage: Manual Chunk Processing with ResamplingBlock
 
-For more control over individual audio chunks, you can use `process_chunk` and `process_chunk_last`:
+For more control over individual audio chunks, `process_chunk` keeps one filter state across
+calls. Finalize it once, at the logical end of the stream, with `process_chunk_last`:
 
 ```python
 from easy_audio_interfaces import ResamplingBlock
@@ -61,6 +54,31 @@ async for final_chunk in resampler.process_chunk_last():
 
 await resampler.close()
 ```
+
+### Stateful sample-rate conversion
+
+Code that does not need the async processing-block adapter can use `SampleRateConverter`
+directly. Its scope is intentionally narrow: it changes the rate of signed 16-bit or 32-bit
+little-endian PCM while preserving width and channel topology.
+
+```python
+from easy_audio_interfaces import SampleRateConverter
+
+converter = SampleRateConverter(24_000)
+for chunk in source_chunks:
+    converted = converter.push(chunk)
+    if converted is not None:
+        consume(converted)
+
+remaining = converter.finish()
+if remaining is not None:
+    consume(remaining)
+```
+
+`push()` may return `None` while the filter is buffering. `finish()` drains that latency and is
+idempotent. Input format changes and pushes after finalization fail explicitly; call `reset()`
+before beginning another logical stream. The converter does not own timestamps, sequence
+numbers, packet sizing, codecs, or transport acknowledgements—those remain application concerns.
 
 ## Installation
 
@@ -91,8 +109,6 @@ uv add "easy-audio-interfaces[bluetooth]"
 # For local audio devices
 uv add "easy-audio-interfaces[local-audio]"
 
-# Only for applications that speak the Wyoming protocol
-uv add "easy-audio-interfaces[wyoming]"
 ```
 
 ## Usage
@@ -112,6 +128,7 @@ uv add "easy-audio-interfaces[wyoming]"
 - **RollingFileSink**: Splits output across time-based WAV segments
 
 #### Processing Blocks
+- **SampleRateConverter**: Stateful synchronous PCM rate conversion with explicit finalization
 - **ResamplingBlock**: Resamples audio to a different sample rate
   - `process_chunk_last()`: Flushes remaining buffered samples from the resampler.
     Call this after processing all chunks to ensure no audio data is lost due to internal buffering.
