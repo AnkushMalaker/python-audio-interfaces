@@ -1,9 +1,8 @@
 from abc import abstractmethod
 from typing import AsyncGenerator, AsyncIterator, Optional, Protocol, Type
 
-from wyoming.audio import AudioChunk
-
 from easy_audio_interfaces.streaming import WaveFileStreamer
+from easy_audio_interfaces.types.audio import AudioChunk
 from easy_audio_interfaces.types.common import AudioStream
 
 
@@ -14,11 +13,9 @@ class AudioSource(AudioStream, Protocol):
         """Read the next audio segment. Return None if no more data."""
         ...
 
-    async def open(self):
-        ...
+    async def open(self): ...
 
-    async def close(self):
-        ...
+    async def close(self): ...
 
     async def __aenter__(self) -> "AudioSource":
         await self.open()
@@ -33,12 +30,10 @@ class AudioSource(AudioStream, Protocol):
         await self.close()
 
     @property
-    def sample_rate(self) -> int | float:
-        ...
+    def sample_rate(self) -> int | float: ...
 
     @property
-    def channels(self) -> int:
-        ...
+    def channels(self) -> int: ...
 
     def __aiter__(self) -> AsyncIterator[AudioChunk]:
         return self.iter_frames()
@@ -65,11 +60,13 @@ class ChunkedWavAudioSource(AudioSource):
             raise ValueError("Either chunk_size_ms or chunk_size_samples must be provided.")
         if chunk_size_ms is not None and chunk_size_samples is not None:
             raise ValueError("Only one of chunk_size_ms or chunk_size_samples can be provided.")
+        if chunk_size_ms is not None and chunk_size_ms <= 0:
+            raise ValueError("chunk_size_ms must be greater than zero.")
+        if chunk_size_samples is not None and chunk_size_samples <= 0:
+            raise ValueError("chunk_size_samples must be greater than zero.")
 
         self._chunk_size_ms = chunk_size_ms
         self._chunk_size_samples = chunk_size_samples
-        if not chunk_size_ms and not chunk_size_samples:
-            self._chunk_size_samples = 512
 
         self._wave_streamer: Optional[WaveFileStreamer] = None
 
@@ -82,8 +79,7 @@ class ChunkedWavAudioSource(AudioSource):
         return self._wave_streamer.channels if self._wave_streamer else 0
 
     @abstractmethod
-    def _create_wave_streamer(self) -> WaveFileStreamer:
-        ...
+    def _create_wave_streamer(self) -> WaveFileStreamer: ...
 
     async def open(self):
         self._wave_streamer = self._create_wave_streamer()
@@ -104,8 +100,7 @@ class ChunkedWavAudioSource(AudioSource):
             elif self._chunk_size_samples is not None:
                 return self._wave_streamer.read_chunk_by_samples(self._chunk_size_samples)
             else:
-                # Default to 512 samples
-                return self._wave_streamer.read_chunk_by_samples(512)
+                raise RuntimeError("Chunk size configuration is missing.")
         except StopIteration:
             return None
 
@@ -118,14 +113,11 @@ class ChunkedWavAudioSource(AudioSource):
 class AudioSink(Protocol):
     """Abstract sink class that can be used to write to a file or stream."""
 
-    async def write(self, data: AudioChunk):
-        ...
+    async def write(self, data: AudioChunk): ...
 
-    async def open(self):
-        ...
+    async def open(self): ...
 
-    async def close(self):
-        ...
+    async def close(self): ...
 
     async def __aenter__(self) -> "AudioSink":
         await self.open()
@@ -149,14 +141,11 @@ class ProcessingBlock(Protocol):
 
     # async def process(self, input_stream: AudioStream) -> AudioStream: ...
 
-    def process_chunk(self, chunk: AudioChunk) -> AsyncGenerator[AudioChunk, None]:
-        ...
+    def process_chunk(self, chunk: AudioChunk) -> AsyncGenerator[AudioChunk, None]: ...
 
-    async def open(self):
-        ...
+    async def open(self): ...
 
-    async def close(self):
-        ...
+    async def close(self): ...
 
     async def __aenter__(self) -> "ProcessingBlock":
         await self.open()

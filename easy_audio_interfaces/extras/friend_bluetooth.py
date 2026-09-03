@@ -5,9 +5,9 @@ from typing import Iterable
 
 import opuslib
 from bleak import BleakClient, BleakScanner
-from wyoming.audio import AudioChunk
 
 from easy_audio_interfaces.filesystem.filesystem_interfaces import LocalFileSink
+from easy_audio_interfaces.types.audio import AudioChunk
 
 # Device settings
 DEVICE_NAME = "Friend"
@@ -77,7 +77,7 @@ class FrameProcessor:
             frame_size = 320  # Adjust frame size as per Opus settings (e.g., 960 for 20ms frames at 48kHz, or 320 for 20 ms at 16 kHz)
             frame = await self.frame_queue.get()
             pcm_data.extend(self.opus_decoder.decode(bytes(frame), frame_size))
-        return pcm_data
+        return bytes(pcm_data)
 
 
 async def find_device_by_name(name=DEVICE_NAME):

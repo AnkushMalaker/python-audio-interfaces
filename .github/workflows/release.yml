@@ -11,6 +11,10 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v4
 
@@ -22,7 +26,7 @@ jobs:
       # GitHub's cached CPython is usually quicker than uv downloading
       - uses: actions/setup-python@v5
         with:
-          python-version-file: pyproject.toml   # uses your requires-python
+          python-version: ${{ matrix.python-version }}
 
       - name: Install dev deps
         run: uv sync --locked --extra test --dev

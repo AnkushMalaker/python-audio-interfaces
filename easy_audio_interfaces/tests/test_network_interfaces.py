@@ -2,9 +2,9 @@ import asyncio
 from typing import AsyncGenerator
 
 import pytest
-from wyoming.audio import AudioChunk
 
 from easy_audio_interfaces.network.network_interfaces import SocketClient, SocketServer
+from easy_audio_interfaces.types.audio import AudioChunk
 
 from .utils import create_sine_wave_audio_chunk
 
@@ -121,8 +121,9 @@ async def test_socket_streaming():
 
 @pytest.mark.asyncio
 async def test_socket_server_multiple_connections():
-    """Test that SocketServer handles multiple connection attempts correctly"""
+    """Intent: replacing a client keeps the receiver active and accepts the new client's PCM."""
     test_port = BASE_TEST_PORT + 3
+    audio_chunk = create_sine_wave_audio_chunk(100, SINE_FREQUENCY, SINE_SAMPLE_RATE)
     async with SocketServer(port=test_port, sample_rate=SINE_SAMPLE_RATE, channels=1) as receiver:
         # Create first connection
         async with SocketClient(
@@ -135,11 +136,51 @@ async def test_socket_server_multiple_connections():
                 uri=f"ws://localhost:{test_port}", sample_rate=SINE_SAMPLE_RATE, channels=1
             ) as streamer2:
                 await asyncio.sleep(0.1)
+                await streamer2.write(audio_chunk)
+                received_chunk = await asyncio.wait_for(receiver.read(), timeout=1)
 
-                # Basic validation
+                assert received_chunk == audio_chunk
                 assert receiver.websocket is not None
-                # Just verify the websocket connection exists (open attribute may not be available)
-                assert receiver.websocket is not None
+                assert not receiver._stop_event.is_set()
+
+
+@pytest.mark.asyncio
+async def test_socket_server_accepts_reconnection_after_disconnect():
+    """Intent: an ordinary disconnect must not terminate iteration for the next client."""
+    receiver = SocketServer(host="127.0.0.1", port=0, sample_rate=SINE_SAMPLE_RATE, channels=1)
+    await receiver.open()
+    assert receiver._server is not None
+    port = receiver._server.sockets[0].getsockname()[1]
+    uri = f"ws://127.0.0.1:{port}"
+    audio_chunk = create_sine_wave_audio_chunk(100, SINE_FREQUENCY, SINE_SAMPLE_RATE)
+
+    try:
+        async with SocketClient(uri=uri) as first_client:
+            await first_client.write(audio_chunk)
+            assert await asyncio.wait_for(receiver.read(), timeout=1) == audio_chunk
+
+        await asyncio.sleep(0.05)
+        assert not receiver._stop_event.is_set()
+
+        async with SocketClient(uri=uri) as second_client:
+            next_frame = asyncio.create_task(anext(receiver.iter_frames()))
+            await second_client.write(audio_chunk)
+            assert await asyncio.wait_for(next_frame, timeout=1) == audio_chunk
+    finally:
+        await receiver.close()
+
+
+@pytest.mark.asyncio
+async def test_socket_server_stop_unblocks_pending_iteration():
+    """Intent: explicit shutdown must wake a consumer waiting on an empty frame queue."""
+    receiver = SocketServer()
+    next_frame = asyncio.create_task(anext(receiver.iter_frames()))
+    await asyncio.sleep(0)
+
+    await receiver.stop()
+
+    with pytest.raises(StopAsyncIteration):
+        await asyncio.wait_for(next_frame, timeout=1)
 
 
 @pytest.mark.asyncio

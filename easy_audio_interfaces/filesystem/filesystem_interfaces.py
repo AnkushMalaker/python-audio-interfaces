@@ -5,10 +5,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import AsyncGenerator, AsyncIterable, Callable, Iterable, Optional, Type
 
-from wyoming.audio import AudioChunk
-
 from easy_audio_interfaces.base_interfaces import AudioSink, ChunkedWavAudioSource
 from easy_audio_interfaces.streaming import WaveFileStreamer
+from easy_audio_interfaces.types.audio import AudioChunk
 from easy_audio_interfaces.types.common import PathLike
 
 logger = logging.getLogger(__name__)
@@ -112,6 +111,12 @@ class LocalFileSink(AudioSink):
     async def write(self, data: AudioChunk):
         if self._file_handle is None:
             raise RuntimeError("File is not open. Call 'open()' first.")
+        if data.rate != self._sample_rate:
+            raise ValueError(f"Sample rate mismatch: {data.rate} != {self._sample_rate}")
+        if data.width != self._sample_width:
+            raise ValueError(f"Sample width mismatch: {data.width} != {self._sample_width}")
+        if data.channels != self._channels:
+            raise ValueError(f"Channel count mismatch: {data.channels} != {self._channels}")
         await asyncio.to_thread(self._file_handle.writeframes, data.audio)
         logger.debug(f"Wrote {len(data.audio)} bytes to {self._file_path}.")
 
@@ -178,7 +183,16 @@ class RollingFileSink(AudioSink):
         self._sample_width = sample_width
 
         # Calculate the target samples per segment and use rechunking for exact durations
+        if segment_duration_seconds <= 0:
+            raise ValueError("segment_duration_seconds must be greater than zero")
+        if sample_rate <= 0:
+            raise ValueError("sample_rate must be greater than zero")
         target_samples_per_segment = int(segment_duration_seconds * sample_rate)
+        if target_samples_per_segment <= 0:
+            raise ValueError(
+                "segment_duration_seconds is too small to contain one sample at "
+                f"{sample_rate} Hz"
+            )
 
         # Import here to avoid circular imports
         from easy_audio_interfaces.audio_interfaces import RechunkingBlock
@@ -189,6 +203,7 @@ class RollingFileSink(AudioSink):
         self._current_sink: Optional[LocalFileSink] = None
         self._current_file_path: Optional[Path] = None
         self._file_counter: int = 0
+        self._is_open = False
         self.generate_filename: Callable[[], str] = self._generate_filename
 
     @property
@@ -208,17 +223,13 @@ class RollingFileSink(AudioSink):
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]  # Include milliseconds
         return f"{self._prefix}_{timestamp}_{self._file_counter:03d}.wav"
 
-    async def _roll_file(self):
-        """Close current file and start a new one."""
-        if self._current_sink:
-            await self._current_sink.close()
-            logger.info(f"Closed rolled file: {self._current_file_path}")
+    async def _open_file(self):
+        """Open a file only when a segment is ready to be written."""
+        if self._current_sink is not None:
+            raise RuntimeError("A rolled file is already open")
 
-        # Generate new file path
         filename = self.generate_filename()
         self._current_file_path = self._directory / filename
-
-        # Create new LocalFileSink instance
         self._current_sink = LocalFileSink(
             file_path=self._current_file_path,
             sample_rate=self._sample_rate,
@@ -230,8 +241,23 @@ class RollingFileSink(AudioSink):
         self._file_counter += 1
         logger.info(f"Started new rolled file: {self._current_file_path}")
 
+    async def _write_segment(self, segment: AudioChunk):
+        """Write one complete or final partial segment to exactly one file."""
+        await self._open_file()
+        assert self._current_sink is not None
+        try:
+            await self._current_sink.write(segment)
+        finally:
+            try:
+                await self._current_sink.close()
+            finally:
+                self._current_sink = None
+        logger.info(f"Completed file segment: {self._current_file_path}")
+
     async def open(self):
         logger.debug(f"Opening rolling file sink in directory: {self._directory}")
+        if self._is_open:
+            raise RuntimeError("Rolling file sink is already open")
 
         # Create directory if it doesn't exist
         if not self._directory.exists():
@@ -243,26 +269,22 @@ class RollingFileSink(AudioSink):
 
         # Initialize the rechunker
         await self._rechunker.open()
-
-        # Start the first file
-        await self._roll_file()
+        self._is_open = True
         logger.info(f"Opened rolling file sink in directory: {self._directory}")
 
     async def write(self, data: AudioChunk):
-        if self._current_sink is None:
+        if not self._is_open:
             raise RuntimeError("File sink is not open. Call 'open()' first.")
+        if data.rate != self._sample_rate:
+            raise ValueError(f"Sample rate mismatch: {data.rate} != {self._sample_rate}")
+        if data.width != self._sample_width:
+            raise ValueError(f"Sample width mismatch: {data.width} != {self._sample_width}")
+        if data.channels != self._channels:
+            raise ValueError(f"Channel count mismatch: {data.channels} != {self._channels}")
 
         # Use the rechunker to get exactly-sized chunks
         async for segment_chunk in self._rechunker.process_chunk(data):
-            # Each chunk from the rechunker represents exactly one file segment
-            await self._current_sink.write(segment_chunk)
-            await self._current_sink.close()
-
-            # Log the completed file
-            logger.info(f"Completed file segment: {self._current_file_path}")
-
-            # Start a new file for the next segment
-            await self._roll_file()
+            await self._write_segment(segment_chunk)
 
     async def write_from(self, input_stream: AsyncIterable[AudioChunk] | Iterable[AudioChunk]):
         total_frames = 0
@@ -282,25 +304,28 @@ class RollingFileSink(AudioSink):
         )
 
     async def close(self):
-        # Flush any remaining data from the rechunker
-        if self._rechunker._buffer and self._current_sink:
-            # Process any remaining buffered data
-            remaining_chunk = AudioChunk(
-                audio=self._rechunker._buffer,
-                rate=int(self._sample_rate),
-                width=self._sample_width,
-                channels=self._channels,
-            )
-            await self._current_sink.write(remaining_chunk)
-            logger.info(f"Wrote final partial segment: {self._current_file_path}")
+        if not self._is_open:
+            return
 
-        if self._current_sink:
-            await self._current_sink.close()
-            self._current_sink = None
-            logger.info(f"Closed final rolled file: {self._current_file_path}")
+        try:
+            # Flush any remaining data from the rechunker
+            if self._rechunker._buffer:
+                remaining_chunk = AudioChunk(
+                    audio=self._rechunker._buffer,
+                    rate=int(self._sample_rate),
+                    width=self._sample_width,
+                    channels=self._channels,
+                )
+                await self._write_segment(remaining_chunk)
+                logger.info(f"Wrote final partial segment: {self._current_file_path}")
 
-        # Close the rechunker
-        await self._rechunker.close()
+            if self._current_sink:
+                await self._current_sink.close()
+                self._current_sink = None
+                logger.info(f"Closed final rolled file: {self._current_file_path}")
+        finally:
+            await self._rechunker.close()
+            self._is_open = False
 
         logger.info(
             f"Closed rolling file sink. Created {self._file_counter} files in {self._directory}"

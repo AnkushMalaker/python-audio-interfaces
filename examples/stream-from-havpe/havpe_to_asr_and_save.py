@@ -16,10 +16,11 @@ from typing import Optional
 
 import numpy as np
 from wyoming.asr import Transcribe, Transcript
-from wyoming.audio import AudioChunk, AudioStart
+from wyoming.audio import AudioStart
 from wyoming.client import AsyncClient
 
-from easy_audio_interfaces import RollingFileSink
+from easy_audio_interfaces import AudioChunk, RollingFileSink
+from easy_audio_interfaces.integrations.wyoming import audio_chunk_to_event
 from easy_audio_interfaces.network.network_interfaces import TCPServer
 
 DEFAULT_PORT = 8989
@@ -144,7 +145,7 @@ async def process_esp32_audio(
             await file_sink.write(chunk)
 
             # Send to ASR
-            await asr_client.write_event(chunk.event())
+            await asr_client.write_event(audio_chunk_to_event(chunk))
     except asyncio.CancelledError:
         logger.info("ESP32 audio processor cancelled")
         raise

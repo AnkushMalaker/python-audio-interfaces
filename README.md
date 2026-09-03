@@ -7,23 +7,37 @@ Easy Audio Interfaces is a Python library that provides a simple and flexible wa
 - Socket-based audio streaming
 - Local file reading and writing
 - Audio resampling and rechunking
-- Voice activity detection (VAD) using Silero VAD model
 - Network file transfer
+- Native, validated PCM audio chunks with no protocol dependency
 
 ## Quick Start
 
-Here's a simple example to get you started - record audio from a socket, process it, and save to a file:
+Here's a simple example that streams a WAV file, resamples it, and writes the result:
 
 ```python
-from easy_audio_interfaces import SocketReceiver, LocalFileSink, RechunkingBlock, ResamplingBlock
+from easy_audio_interfaces import LocalFileSink, LocalFileStreamer, ResamplingBlock
 
-async with SocketReceiver() as receiver, LocalFileSink("output.wav") as sink:
-    rechunker = RechunkingBlock(chunk_size=512)
-    resampler = ResamplingBlock(original_sample_rate=receiver.sample_rate, resample_rate=16000)
+async with LocalFileStreamer("input.wav", chunk_size_ms=20) as source:
+    resampler = ResamplingBlock(resample_rate=16_000)
+    async with resampler, LocalFileSink(
+        "output.wav", sample_rate=16_000, channels=source.channels
+    ) as sink:
+        await sink.write_from(resampler.process(source))
+```
 
-    rechunked_stream = rechunker.rechunk(receiver)
-    resampled_stream = resampler.resample(rechunked_stream)
-    await sink.write_from(resampled_stream)
+### Audio Model
+
+`AudioChunk` and `AudioFormat` are native, protocol-neutral PCM types. A chunk contains raw
+interleaved audio bytes plus its sample rate, bytes per sample, channel count, and optional
+timestamp. Construction validates the format and rejects partial sample frames.
+
+Wyoming is not required by the library. Applications that intentionally speak the Wyoming
+protocol can install the `wyoming` extra and convert a native chunk at the boundary:
+
+```python
+from easy_audio_interfaces.integrations.wyoming import audio_chunk_to_event
+
+await client.write_event(audio_chunk_to_event(chunk))
 ```
 
 #### Advanced Usage: Manual Chunk Processing with ResamplingBlock
@@ -32,8 +46,6 @@ For more control over individual audio chunks, you can use `process_chunk` and `
 
 ```python
 from easy_audio_interfaces import ResamplingBlock
-from wyoming.audio import AudioChunk
-
 resampler = ResamplingBlock(resample_rate=16000)
 await resampler.open()
 
@@ -78,6 +90,9 @@ uv add "easy-audio-interfaces[bluetooth]"
 
 # For local audio devices
 uv add "easy-audio-interfaces[local-audio]"
+
+# Only for applications that speak the Wyoming protocol
+uv add "easy-audio-interfaces[wyoming]"
 ```
 
 ## Usage
@@ -85,42 +100,34 @@ uv add "easy-audio-interfaces[local-audio]"
 ### Main Components
 
 #### Audio Sources
-- **SocketReceiver**: Receives audio data over a WebSocket connection
+- **SocketServer**: Receives audio messages over a WebSocket connection
+- **TCPServer**: Receives raw audio bytes over TCP
 - **LocalFileStreamer**: Streams audio data from a local file
+- **SourceFromBytesIO**: Streams a WAV held in memory
 
 #### Audio Sinks
-- **SocketStreamer**: Sends audio data over a WebSocket connection
+- **SocketClient**: Sends audio messages over a WebSocket connection
+- **TCPClient**: Sends raw audio bytes over TCP
 - **LocalFileSink**: Writes audio data to a local file
+- **RollingFileSink**: Splits output across time-based WAV segments
 
 #### Processing Blocks
-- **CollectorBlock**: Collects audio samples for a specified duration
 - **ResamplingBlock**: Resamples audio to a different sample rate
   - `process_chunk_last()`: Flushes remaining buffered samples from the resampler.
     Call this after processing all chunks to ensure no audio data is lost due to internal buffering.
 - **RechunkingBlock**: Rechunks audio data into fixed-size chunks
 
-#### Voice Activity Detection
-- **SileroVad**: Uses the Silero VAD model for voice activity detection
-- **VoiceGate**: Applies voice activity detection to segment audio
-
 ### Examples
-
-#### Basic Friend Recorder
-Records voice segments from a network stream using VAD:
-
-```bash
-python -m easy_audio_interfaces.examples.basic_friend_recorder
-```
 
 #### File Network Transfer
 Transfer audio files over a network:
 
 ```bash
 # Sender
-python -m easy_audio_interfaces.examples.file_network_transfer sender input_file.wav --host localhost --port 8080
+python examples/file_network_transfer.py sender input_file.wav --host localhost --port 8080
 
 # Receiver
-python -m easy_audio_interfaces.examples.file_network_transfer receiver output_file.wav --host 0.0.0.0 --port 8080
+python examples/file_network_transfer.py receiver output_file.wav --host 0.0.0.0 --port 8080
 ```
 
 For more detailed usage and API documentation, please refer to the docstrings in the source code.

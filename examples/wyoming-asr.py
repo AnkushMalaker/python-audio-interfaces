@@ -8,6 +8,7 @@ from wyoming.client import AsyncClient
 
 from easy_audio_interfaces.extras.local_audio import InputMicStream
 from easy_audio_interfaces.filesystem.filesystem_interfaces import RollingFileSink
+from easy_audio_interfaces.integrations.wyoming import audio_chunk_to_event
 
 logging.basicConfig(level=logging.INFO)
 
@@ -40,7 +41,7 @@ async def main():
         if elapsed > 10:
             break
         print(f"Sending chunk {elapsed:.2f}s")
-        await client.write_event(chunk.event())
+        await client.write_event(audio_chunk_to_event(chunk))
 
     await client.write_event(AudioStop().event())
     while True:

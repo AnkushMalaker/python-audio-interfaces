@@ -6,7 +6,6 @@ from typing import AsyncGenerator
 import numpy as np
 import soxr
 from numpy.typing import NDArray
-from wyoming.audio import AudioChunk, AudioFormat
 
 from easy_audio_interfaces.base_interfaces import (
     AudioSink,
@@ -15,6 +14,7 @@ from easy_audio_interfaces.base_interfaces import (
     ProcessingBlock,
 )
 from easy_audio_interfaces.streaming import WaveFileStreamer
+from easy_audio_interfaces.types.audio import AudioChunk, AudioFormat
 from easy_audio_interfaces.types.common import AudioStream
 
 logger = logging.getLogger(__name__)
@@ -25,11 +25,9 @@ class StreamFromCommand(AudioSource):
     def __init__(self, command: str):
         self._command = command
 
-    async def open(self):
-        ...
+    async def open(self): ...
 
-    async def close(self):
-        ...
+    async def close(self): ...
 
 
 class SourceFromBytesIO(ChunkedWavAudioSource):
@@ -133,9 +131,20 @@ class ResamplingBlock(ProcessingBlock):
         # Arithmetic right-shift keeps sign for negative values
         return (samples32 >> 16).astype(np.int16)
 
+    def _normalized_float_to_int(
+        self,
+        samples: NDArray[np.floating] | NDArray[np.signedinteger],
+        dtype: type[np.signedinteger],
+    ) -> NDArray[np.signedinteger]:
+        """Convert normalized floats without overflowing at integer boundaries."""
+
+        limits = np.iinfo(dtype)
+        scaled = np.asarray(samples, dtype=np.float64) * float(limits.max)
+        return np.rint(scaled).clip(limits.min, limits.max).astype(dtype)
+
     def _audio_chunk_to_numpy_float(self, chunk: AudioChunk) -> NDArray[np.floating]:
         """Convert AudioChunk bytes to numpy array as float32."""
-        dtype: type[np.signedinteger] | type[np.floating]
+        dtype: type[np.signedinteger]
         # Determine the numpy dtype based on audio width
         if chunk.width == 1:
             dtype = np.int8
@@ -147,7 +156,7 @@ class ResamplingBlock(ProcessingBlock):
             raise ValueError(f"Unsupported audio width: {chunk.width}")
 
         # Convert bytes to numpy array
-        audio_array = np.frombuffer(chunk.audio, dtype=dtype)
+        audio_array: np.ndarray = np.frombuffer(chunk.audio, dtype=dtype)
 
         # Reshape for multiple channels if needed
         if chunk.channels > 1:
@@ -176,27 +185,19 @@ class ResamplingBlock(ProcessingBlock):
     ) -> AudioChunk:
         """Convert numpy array back to AudioChunk."""
         # Determine the numpy dtype and scale factor based on audio width
-        dtype: type[np.signedinteger] | type[np.floating]
+        dtype: type[np.signedinteger]
         if width == 1:
             dtype = np.int8
-            max_val = np.iinfo(np.int8).max
-            scale_factor = float(np.iinfo(np.int8).max)
         elif width == 2:
             dtype = np.int16
-            max_val = np.iinfo(np.int16).max
-            scale_factor = float(np.iinfo(np.int16).max)
         elif width == 4:
             dtype = np.int32
-            max_val = np.iinfo(np.int32).max
-            scale_factor = float(np.iinfo(np.int32).max)
         else:
             raise ValueError(f"Unsupported audio width: {width}")
 
         # If we have normalized floats, scale back to integer range
         if np.issubdtype(audio_array.dtype, np.floating):
-            scaled_array = audio_array * scale_factor
-            clipped_array = np.rint(scaled_array).clip(-max_val, max_val)
-            processed_array = clipped_array.astype(dtype)
+            processed_array = self._normalized_float_to_int(audio_array, dtype)
         else:
             # Ensure the array is the correct dtype
             processed_array = audio_array.astype(dtype)
@@ -347,21 +348,13 @@ class ResamplingBlock(ProcessingBlock):
                     # Convert 32-bit to 16-bit using arithmetic right-shift
                     # Scale back from normalized float32 to int32 range first
                     if np.issubdtype(resampled.dtype, np.floating):
-                        int32_scale = float(np.iinfo(np.int32).max)
-                        int32_min = np.iinfo(np.int32).min
-                        int32_max = np.iinfo(np.int32).max
-                        resampled = resampled * int32_scale
-                        resampled = np.rint(resampled).clip(int32_min, int32_max).astype(np.int32)
+                        resampled = self._normalized_float_to_int(resampled, np.int32)
                     resampled_int = self._int32_to_int16(resampled.astype(np.int32))
                 elif chunk.width == 2 and self._resample_width == 4:
                     # Convert 16-bit to 32-bit by scaling up
                     # Scale back from normalized float32 to int16 range first, then scale to int32
                     if np.issubdtype(resampled.dtype, np.floating):
-                        int16_scale = float(np.iinfo(np.int16).max)
-                        int16_min = np.iinfo(np.int16).min
-                        int16_max = np.iinfo(np.int16).max
-                        resampled = resampled * int16_scale
-                        resampled = np.rint(resampled).clip(int16_min, int16_max).astype(np.int16)
+                        resampled = self._normalized_float_to_int(resampled, np.int16)
                     resampled_int = resampled.astype(np.int32) << 16
                 else:
                     raise ValueError(
@@ -417,27 +410,15 @@ class ResamplingBlock(ProcessingBlock):
                     if self._input_width == 4 and self._resample_width == 2:
                         # Convert 32-bit to 16-bit using arithmetic right-shift
                         if np.issubdtype(remaining_samples.dtype, np.floating):
-                            int32_scale = float(np.iinfo(np.int32).max)
-                            int32_min = np.iinfo(np.int32).min
-                            int32_max = np.iinfo(np.int32).max
-                            remaining_samples = remaining_samples * int32_scale
-                            remaining_samples = (
-                                np.rint(remaining_samples)
-                                .clip(int32_min, int32_max)
-                                .astype(np.int32)
+                            remaining_samples = self._normalized_float_to_int(
+                                remaining_samples, np.int32
                             )
                         remaining_samples = self._int32_to_int16(remaining_samples)
                     elif self._input_width == 2 and self._resample_width == 4:
                         # Convert 16-bit to 32-bit by scaling up
                         if np.issubdtype(remaining_samples.dtype, np.floating):
-                            int16_scale = float(np.iinfo(np.int16).max)
-                            int16_min = np.iinfo(np.int16).min
-                            int16_max = np.iinfo(np.int16).max
-                            remaining_samples = remaining_samples * int16_scale
-                            remaining_samples = (
-                                np.rint(remaining_samples)
-                                .clip(int16_min, int16_max)
-                                .astype(np.int16)
+                            remaining_samples = self._normalized_float_to_int(
+                                remaining_samples, np.int16
                             )
                         remaining_samples = remaining_samples.astype(np.int32) << 16
 
@@ -514,21 +495,13 @@ class ResamplingBlock(ProcessingBlock):
                 # Convert 32-bit to 16-bit using arithmetic right-shift
                 # Scale back from normalized float32 to int32 range first
                 if np.issubdtype(resampled.dtype, np.floating):
-                    int32_scale = float(np.iinfo(np.int32).max)
-                    int32_min = np.iinfo(np.int32).min
-                    int32_max = np.iinfo(np.int32).max
-                    resampled = resampled * int32_scale
-                    resampled = np.rint(resampled).clip(int32_min, int32_max).astype(np.int32)
+                    resampled = self._normalized_float_to_int(resampled, np.int32)
                 resampled_int = self._int32_to_int16(resampled.astype(np.int32))
             elif chunk.width == 2 and self._resample_width == 4:
                 # Convert 16-bit to 32-bit by scaling up
                 # Scale back from normalized float32 to int16 range first, then scale to int32
                 if np.issubdtype(resampled.dtype, np.floating):
-                    int16_scale = float(np.iinfo(np.int16).max)
-                    int16_min = np.iinfo(np.int16).min
-                    int16_max = np.iinfo(np.int16).max
-                    resampled = resampled * int16_scale
-                    resampled = np.rint(resampled).clip(int16_min, int16_max).astype(np.int16)
+                    resampled = self._normalized_float_to_int(resampled, np.int16)
                 resampled_int = resampled.astype(np.int32) << 16
             else:
                 raise ValueError(
@@ -581,6 +554,10 @@ class RechunkingBlock(ProcessingBlock):
             raise ValueError("Either chunk_size_ms or chunk_size_samples must be provided")
         if chunk_size_ms is not None and chunk_size_samples is not None:
             raise ValueError("Only one of chunk_size_ms or chunk_size_samples can be provided")
+        if chunk_size_ms is not None and chunk_size_ms <= 0:
+            raise ValueError("chunk_size_ms must be greater than zero")
+        if chunk_size_samples is not None and chunk_size_samples <= 0:
+            raise ValueError("chunk_size_samples must be greater than zero")
 
         self._chunk_size_ms = chunk_size_ms
         self._chunk_size_samples = chunk_size_samples
@@ -603,12 +580,19 @@ class RechunkingBlock(ProcessingBlock):
             assert self._chunk_size_samples is not None
             target_samples = self._chunk_size_samples
 
+        if target_samples <= 0:
+            raise ValueError(
+                "chunk_size_ms is too small to contain one sample at " f"{audio_format.rate} Hz"
+            )
+
         return self._samples_to_bytes(target_samples, audio_format.width, audio_format.channels)
 
     async def process_chunk(self, chunk: AudioChunk) -> AsyncGenerator[AudioChunk, None]:
         # Store audio format from the first chunk
         if self._audio_format is None:
-            self._audio_format = chunk
+            self._audio_format = chunk.format
+        elif chunk.format != self._audio_format:
+            raise ValueError(f"Audio format changed from {self._audio_format} to {chunk.format}")
 
         target_chunk_size = self._get_target_chunk_size_bytes(chunk)
 

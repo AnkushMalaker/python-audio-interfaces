@@ -1,15 +1,39 @@
 import asyncio
+import socket
 
 import pytest
-from wyoming.audio import AudioChunk
 
 from easy_audio_interfaces.network.network_interfaces import TCPClient, TCPServer
+from easy_audio_interfaces.types.audio import AudioChunk
 
 from .utils import create_sine_wave_audio_chunk
 
 SINE_FREQUENCY = 440
 SINE_SAMPLE_RATE = 44100
 BASE_TEST_PORT = 9100  # Different base port to avoid conflicts with WebSocket tests
+
+
+@pytest.mark.asyncio
+async def test_tcp_server_buffers_partial_pcm_frames():
+    """Intent: TCP packet boundaries must not create malformed partial PCM frames."""
+    server_socket, client_socket = socket.socketpair()
+    server_socket.setblocking(False)
+    client_socket.setblocking(False)
+    server = TCPServer(sample_rate=16_000, channels=1, sample_width=2, chunk_size=3)
+    server._client_socket = server_socket
+    server._is_running = True
+    audio = b"\x01\x02\x03\x04\x05\x06\x07\x08"
+
+    try:
+        await asyncio.get_running_loop().sock_sendall(client_socket, audio)
+        received = [await server.read() for _ in range(3)]
+
+        assert all(chunk is not None for chunk in received)
+        assert all(len(chunk.audio) % chunk.frame_size == 0 for chunk in received if chunk)
+        assert b"".join(chunk.audio for chunk in received if chunk) == audio
+    finally:
+        await server.close()
+        client_socket.close()
 
 
 @pytest.mark.asyncio

@@ -1,14 +1,15 @@
 import shutil
+import wave
 from pathlib import Path
 
 import pytest
-from wyoming.audio import AudioChunk
 
 from easy_audio_interfaces.filesystem.filesystem_interfaces import (
     LocalFileSink,
     LocalFileStreamer,
     RollingFileSink,
 )
+from easy_audio_interfaces.types.audio import AudioChunk
 
 from .utils import async_generator, create_sine_wave_audio_chunk
 
@@ -82,6 +83,18 @@ async def test_local_file_sink_error_handling():
 
 
 @pytest.mark.asyncio
+async def test_local_file_sink_rejects_format_mismatch(tmp_path):
+    """Intent: a WAV sink must reject PCM that does not match its configured header."""
+    chunk = create_sine_wave_audio_chunk(100, SINE_FREQUENCY, SINE_SAMPLE_RATE, channels=2)
+
+    async with LocalFileSink(
+        tmp_path / "mismatch.wav", sample_rate=SINE_SAMPLE_RATE, channels=1
+    ) as sink:
+        with pytest.raises(ValueError, match="Channel count mismatch"):
+            await sink.write(chunk)
+
+
+@pytest.mark.asyncio
 async def test_local_file_streamer_error_handling():
     """Test error handling in LocalFileStreamer"""
     non_existent_file = "non_existent_file.wav"
@@ -91,9 +104,9 @@ async def test_local_file_streamer_error_handling():
 
 
 @pytest.mark.asyncio
-async def test_rolling_file_sink_basic():
-    """Test basic functionality of RollingFileSink"""
-    output_dir = Path(TEST_ROLLING_DIR)
+async def test_rolling_file_sink_basic(tmp_path):
+    """Intent: exact-boundary audio creates two populated files and no trailing file."""
+    output_dir = tmp_path / "rolling"
     prefix = "test_recording_basic"  # Unique prefix
     segment_duration = 1.0  # 1 second segments
 
@@ -113,17 +126,70 @@ async def test_rolling_file_sink_basic():
     # Verify files were created
     assert output_dir.exists()
     wav_files = list(output_dir.glob(f"{prefix}_*.wav"))
-    assert len(wav_files) >= 2  # Should have at least 2 files
+    assert len(wav_files) == 2
 
     # Verify files have the correct naming pattern
     for wav_file in wav_files:
         assert wav_file.name.startswith(prefix + "_")
         assert wav_file.suffix == ".wav"
-        assert wav_file.stat().st_size > 0  # Files should not be empty
+        with wave.open(str(wav_file), "rb") as wav_reader:
+            assert wav_reader.getnframes() == SINE_SAMPLE_RATE
 
-    # Clean up
-    if output_dir.exists():
-        shutil.rmtree(output_dir)
+
+@pytest.mark.asyncio
+async def test_rolling_file_sink_does_not_create_file_without_audio(tmp_path):
+    """Intent: opening and closing an idle rolling sink must not emit an empty WAV."""
+    output_dir = tmp_path / "idle"
+
+    async with RollingFileSink(
+        directory=output_dir,
+        prefix="idle",
+        segment_duration_seconds=1,
+        sample_rate=SINE_SAMPLE_RATE,
+        channels=1,
+    ):
+        pass
+
+    assert list(output_dir.glob("*.wav")) == []
+
+
+@pytest.mark.parametrize("segment_duration", [0, -0.1])
+def test_rolling_file_sink_rejects_non_positive_segment_duration(tmp_path, segment_duration):
+    """Intent: invalid segment durations fail immediately instead of creating a stalled sink."""
+    with pytest.raises(ValueError, match="segment_duration_seconds must be greater than zero"):
+        RollingFileSink(
+            directory=tmp_path,
+            prefix="invalid",
+            segment_duration_seconds=segment_duration,
+            sample_rate=SINE_SAMPLE_RATE,
+            channels=1,
+        )
+
+
+def test_rolling_file_sink_rejects_segment_below_one_sample(tmp_path):
+    """Intent: a positive rolling duration must still represent at least one PCM sample."""
+    with pytest.raises(ValueError, match="too small to contain one sample"):
+        RollingFileSink(
+            directory=tmp_path,
+            prefix="invalid",
+            segment_duration_seconds=0.5 / SINE_SAMPLE_RATE,
+            sample_rate=SINE_SAMPLE_RATE,
+            channels=1,
+        )
+
+
+@pytest.mark.parametrize("chunk_size_ms", [0, -1])
+def test_local_file_streamer_rejects_non_positive_duration(tmp_path, chunk_size_ms):
+    """Intent: file sources reject duration settings that could make reads stop advancing."""
+    with pytest.raises(ValueError, match="chunk_size_ms must be greater than zero"):
+        LocalFileStreamer(tmp_path / "unused.wav", chunk_size_ms=chunk_size_ms)
+
+
+@pytest.mark.parametrize("chunk_size_samples", [0, -1])
+def test_local_file_streamer_rejects_non_positive_sample_size(tmp_path, chunk_size_samples):
+    """Intent: file sources reject sample settings that could make reads stop advancing."""
+    with pytest.raises(ValueError, match="chunk_size_samples must be greater than zero"):
+        LocalFileStreamer(tmp_path / "unused.wav", chunk_size_samples=chunk_size_samples)
 
 
 @pytest.mark.asyncio

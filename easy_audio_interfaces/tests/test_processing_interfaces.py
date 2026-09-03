@@ -8,11 +8,52 @@ from typing import Union
 import numpy as np
 import pytest
 from scipy.signal import correlate
-from wyoming.audio import AudioChunk
 
 from easy_audio_interfaces import RechunkingBlock, ResamplingBlock
+from easy_audio_interfaces.types.audio import AudioChunk
 
 from .utils import async_generator, create_sine_wave_audio_chunk
+
+
+@pytest.mark.asyncio
+async def test_rechunking_block_rejects_midstream_format_change():
+    """Intent: buffered PCM cannot silently combine incompatible audio formats."""
+    block = RechunkingBlock(chunk_size_samples=100)
+    mono = create_sine_wave_audio_chunk(10, channels=1)
+    stereo = create_sine_wave_audio_chunk(10, channels=2)
+
+    async for _ in block.process_chunk(mono):
+        pass
+
+    with pytest.raises(ValueError, match="Audio format changed"):
+        async for _ in block.process_chunk(stereo):
+            pass
+
+
+@pytest.mark.parametrize("chunk_size_samples", [0, -1])
+def test_rechunking_block_rejects_non_positive_sample_size(chunk_size_samples):
+    """Intent: sample-based rechunking must always consume input and make progress."""
+    with pytest.raises(ValueError, match="chunk_size_samples must be greater than zero"):
+        RechunkingBlock(chunk_size_samples=chunk_size_samples)
+
+
+@pytest.mark.parametrize("chunk_size_ms", [0, -1])
+def test_rechunking_block_rejects_non_positive_duration(chunk_size_ms):
+    """Intent: duration-based rechunking must reject values that cannot make progress."""
+    with pytest.raises(ValueError, match="chunk_size_ms must be greater than zero"):
+        RechunkingBlock(chunk_size_ms=chunk_size_ms)
+
+
+@pytest.mark.asyncio
+async def test_rechunking_block_rejects_duration_below_one_sample():
+    """Intent: a positive duration that rounds to zero samples must not spin forever."""
+    block = RechunkingBlock(chunk_size_ms=1)
+    chunk = AudioChunk(audio=b"\x00\x00" * 8, rate=800, width=2, channels=1)
+
+    with pytest.raises(ValueError, match="too small to contain one sample"):
+        async for _ in block.process_chunk(chunk):
+            pass
+
 
 SINE_FREQUENCY = 440
 SINE_SAMPLE_RATE = 44100
@@ -25,6 +66,7 @@ def calculate_relative_tolerance(expected: int, relative_tolerance: float = 0.00
 
 @pytest.mark.asyncio
 async def test_rechunking_block_in_ms():
+    """Intent: duration rechunking preserves all input in consistently timed chunks."""
     # Create a sample AudioChunk of 10 seconds duration
     duration_ms = 10000  # 10 seconds
     audio_chunk = create_sine_wave_audio_chunk(duration_ms, SINE_FREQUENCY, SINE_SAMPLE_RATE)
@@ -50,6 +92,7 @@ async def test_rechunking_block_in_ms():
 
 @pytest.mark.asyncio
 async def test_rechunking_block_in_samples():
+    """Intent: sample rechunking emits exact-sized chunks plus at most one remainder."""
     # Create a sample AudioChunk of 10 seconds duration
     duration_ms = 10000  # 10 seconds
     audio_chunk = create_sine_wave_audio_chunk(duration_ms, SINE_FREQUENCY, SINE_SAMPLE_RATE)

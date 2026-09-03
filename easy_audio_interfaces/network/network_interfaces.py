@@ -4,12 +4,13 @@ import socket
 import time
 from asyncio import Task
 from collections.abc import Coroutine
+from contextlib import suppress
 from typing import Any, AsyncGenerator, AsyncIterable, Callable, Optional, Type
 
 import websockets
-from wyoming.audio import AudioChunk
 
 from easy_audio_interfaces.base_interfaces import AudioSink, AudioSource
+from easy_audio_interfaces.types.audio import AudioChunk
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +73,7 @@ class SocketServer(AudioSource):
         return self._channels
 
     async def handle_client(self, websocket: websockets.ServerConnection):
-        if self.websocket:
+        if self.websocket and self.websocket is not websocket:
             logger.warning(
                 "Should only have one client per socket receiver. Check for logical error. Closing existing connection."
             )
@@ -82,34 +83,35 @@ class SocketServer(AudioSource):
         logger.info(f"Accepted connection from {websocket.remote_address}")
 
         if self._server_routine:
-            self._server_task = asyncio.create_task(self._server_routine)
+            server_task = asyncio.create_task(self._server_routine)
         else:
-            self._server_task = asyncio.create_task(self._send_heartbeat())
+            server_task = asyncio.create_task(self._send_heartbeat(websocket))
+        self._server_task = server_task
 
-        await websocket.send("ack")
-
-        frame_counter = 0
         try:
+            await websocket.send("ack")
             async for frame in self._handle_messages(websocket):
-                frame_counter += 1
                 await self._frame_queue.put(frame)
         finally:
-            self.websocket = None
-            if self._server_task:
-                self._server_task.cancel()
-            await self.stop()
+            server_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await server_task
+            if self._server_task is server_task:
+                self._server_task = None
+            if self.websocket is websocket:
+                self.websocket = None
 
-    async def _send_heartbeat(self):
-        while self.websocket and self.websocket.server.is_serving():
+    async def _send_heartbeat(self, websocket: websockets.ServerConnection):
+        while True:
             try:
-                await self.websocket.send("heartbeat")
+                await websocket.send("heartbeat")
                 logger.debug("Heartbeat sent")
-            except websockets.exceptions.WebSocketException:
-                logger.warning("Failed to send heartbeat")
+            except websockets.exceptions.ConnectionClosed:
+                return
             await asyncio.sleep(5)  # Send heartbeat every 5 seconds
 
     async def _handle_messages(self, websocket: websockets.ServerConnection):
-        while self.websocket and self.websocket.server.is_serving():
+        while True:
             try:
                 message = await websocket.recv()
                 if message == "heartbeat":
@@ -140,18 +142,42 @@ class SocketServer(AudioSource):
 
     async def open(self):
         logger.debug(f"Starting WebSocket server on {self._host}:{self._port}")
+        if self._server is not None:
+            raise RuntimeError("WebSocket server is already open")
+        self._stop_event.clear()
+        self._frame_queue = asyncio.Queue(maxsize=1000)
         self._server = await websockets.serve(self.handle_client, self._host, self._port)
         logger.info(f"WebSocket server listening on ws://{self._host}:{self._port}")
         # Server is ready, don't wait for client connection here
 
-    async def read(self) -> AudioChunk:
-        frame = await self._frame_queue.get()
-        logger.debug(f"Read frame of size: {frame.samples}")
-        return frame
+    async def read(self) -> Optional[AudioChunk]:
+        if self._stop_event.is_set() and self._frame_queue.empty():
+            return None
+
+        frame_task = asyncio.create_task(self._frame_queue.get())
+        stop_task = asyncio.create_task(self._stop_event.wait())
+        try:
+            done, _ = await asyncio.wait(
+                {frame_task, stop_task}, return_when=asyncio.FIRST_COMPLETED
+            )
+            if frame_task in done:
+                frame = frame_task.result()
+                logger.debug(f"Read frame of size: {frame.samples}")
+                return frame
+            return None
+        finally:
+            for task in (frame_task, stop_task):
+                if not task.done():
+                    task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await task
 
     async def iter_frames(self) -> AsyncGenerator[AudioChunk, None]:
-        while not self._stop_event.is_set():
-            yield await self.read()
+        while True:
+            frame = await self.read()
+            if frame is None:
+                break
+            yield frame
 
     async def stop(self):
         self._stop_event.set()
@@ -161,6 +187,8 @@ class SocketServer(AudioSource):
         if self._server:
             self._server.close()
             await self._server.wait_closed()
+            self._server = None
+        self.websocket = None
         logger.info("Closed WebSocket receiver.")
 
     async def __aenter__(self) -> "SocketServer":
@@ -223,6 +251,7 @@ class SocketClient(AudioSink):
     async def close(self):
         if self.websocket:
             await self.websocket.close()
+            self.websocket = None
             logger.info("Closed WebSocket streamer.")
 
     async def write(self, data: AudioChunk):
@@ -286,6 +315,7 @@ class TCPServer(AudioSource):
         self._client_socket: Optional[socket.socket] = None
         self._client_addr: Optional[tuple] = None
         self._is_running = False
+        self._receive_buffer = bytearray()
 
     @property
     def sample_rate(self) -> int:
@@ -309,6 +339,7 @@ class TCPServer(AudioSource):
         loop = asyncio.get_event_loop()
         self._client_socket, self._client_addr = await loop.sock_accept(self._server_socket)
         self._client_socket.setblocking(False)
+        self._receive_buffer.clear()
 
         if self._client_addr:
             logger.info(f"Client connected from {self._client_addr[0]}:{self._client_addr[1]}")
@@ -321,12 +352,27 @@ class TCPServer(AudioSource):
 
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.sock_recv(self._client_socket, self._chunk_size)
+            frame_size = self._sample_width * self._channels
+            while True:
+                data = await loop.sock_recv(self._client_socket, self._chunk_size)
 
-            if not data:
-                logger.warning("Client disconnected")
-                self._is_running = False
-                return None
+                if not data:
+                    if self._receive_buffer:
+                        logger.warning(
+                            "Discarding %d trailing byte(s) that do not form a complete PCM frame",
+                            len(self._receive_buffer),
+                        )
+                        self._receive_buffer.clear()
+                    logger.warning("Client disconnected")
+                    self._is_running = False
+                    return None
+
+                self._receive_buffer.extend(data)
+                complete_size = len(self._receive_buffer) - len(self._receive_buffer) % frame_size
+                if complete_size:
+                    data = bytes(self._receive_buffer[:complete_size])
+                    del self._receive_buffer[:complete_size]
+                    break
 
             # Use post-processing function if provided, otherwise create default AudioChunk
             if self.post_process_bytes_fn:
@@ -351,6 +397,7 @@ class TCPServer(AudioSource):
     async def close(self):
         """Close the TCP server and client connections."""
         self._is_running = False
+        self._receive_buffer.clear()
 
         if self._client_socket:
             self._client_socket.close()

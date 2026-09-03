@@ -12,10 +12,11 @@ logger = logging.getLogger(__name__)
 
 async def sender(input_file: str, host: str = "localhost", port: int = 8080):
     logger.info(f"Sending file: {input_file}")
-    async with LocalFileStreamer(input_file) as file_source:
+    async with LocalFileStreamer(input_file, chunk_size_ms=20) as file_source:
         async with SocketClient(
             sample_rate=file_source.sample_rate,
             channels=file_source.channels,
+            uri=f"ws://{host}:{port}",
         ) as streamer:
             await streamer.write_from(file_source)
     logger.info(f"Finished sending file to {host}:{port}")

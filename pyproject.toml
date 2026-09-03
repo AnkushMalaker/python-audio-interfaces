@@ -3,7 +3,7 @@ name = "easy-audio-interfaces"
 version = "0.8.0"
 description = "Easy Audio Interfaces is a Python library that provides a simple and flexible way to work with audio streams, including recording, playback, network transfer, and processing."
 readme = "README.md"
-requires-python = ">=3.9,<3.13"
+requires-python = ">=3.11"
 authors = [
   { name = "Ankush Malaker", email = "43288948+AnkushMalaker@users.noreply.github.com" },
 ]
@@ -13,7 +13,6 @@ dependencies = [
   "opuslib>=3.0.1,<4.0.0",
   "websockets>=14.0",
   "scipy>=1.13.1",
-  "wyoming>=1.6.1",
   "soxr>=0.5.0.post1",
 ]
 optional-dependencies = { stt = [
@@ -25,6 +24,8 @@ optional-dependencies = { stt = [
   "bleak",
 ], local-audio = [
   "pyaudio",
+], wyoming = [
+  "wyoming>=1.6.1",
 ], test = [
   "pytest",
   "pytest-asyncio",
@@ -41,11 +42,11 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools]
 platforms = ["any"]
 zip-safe  = true
-include-package-data = true
+include-package-data = false
 
 [tool.setuptools.packages.find]
 include = ["easy_audio_interfaces*"]
-exclude = ["easy_audio_interfaces/tests"]
+exclude = ["easy_audio_interfaces.tests*"]
 
 [tool.isort]
 profile = "black"
@@ -59,7 +60,7 @@ exclude = '''
 )
 '''
 line-length = 100
-target-version = ["py39", "py310"]
+target-version = ["py311"]
 
 [tool.mypy]
 files = ["easy_audio_interfaces"]
@@ -73,6 +74,9 @@ module = [
   "torchaudio.*",
   "opuslib.*",
   "soxr.*",
+  "bleak.*",
+  "pyaudio.*",
+  "wyoming.*",
 ]
 ignore_missing_imports = true
 

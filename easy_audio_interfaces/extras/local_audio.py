@@ -4,9 +4,10 @@ import time
 from typing import Optional, Type
 
 import pyaudio
-from wyoming.audio import AudioChunk
 
 from easy_audio_interfaces.audio_interfaces import AudioSink, AudioSource
+from easy_audio_interfaces.types.audio import AudioChunk
+from easy_audio_interfaces.types.common import AudioStream
 
 logger = logging.getLogger(__name__)
 
@@ -165,7 +166,7 @@ class OutputSpeakerStream(PyAudioInterface, AudioSink):
         if frame.channels != self._channels:
             raise ValueError(f"Channels mismatch: {frame.channels} != {self._channels}")
 
-    def write(self, frame: AudioChunk):
+    async def write(self, frame: AudioChunk):
         self._validate_chunk_parameters(frame)
         if self._stream is None:
             raise RuntimeError("Stream is not open. Call 'open()' first.")
@@ -183,11 +184,11 @@ class OutputSpeakerStream(PyAudioInterface, AudioSink):
     ):
         await self.close()
 
-    async def write_from(self, audio_source: AudioSource):
+    async def write_from(self, audio_source: AudioStream):
         async def _write_from():
             try:
                 async for frame in audio_source:
-                    self.write(frame)
+                    await self.write(frame)
             except asyncio.CancelledError:
                 logger.info("write_from task cancelled")
 
@@ -210,7 +211,7 @@ async def main():
         async for frame in mic:
             frame = frame + 5  # Do some processing
             print(frame.dBFS)
-            speaker.write(frame)
+            await speaker.write(frame)
 
 
 if __name__ == "__main__":

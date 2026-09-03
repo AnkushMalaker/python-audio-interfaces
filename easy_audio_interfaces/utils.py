@@ -2,8 +2,7 @@ import wave
 from pathlib import Path
 from typing import BinaryIO
 
-from wyoming.audio import AudioChunk
-
+from easy_audio_interfaces.types.audio import AudioChunk
 from easy_audio_interfaces.types.common import PathLike
 
 

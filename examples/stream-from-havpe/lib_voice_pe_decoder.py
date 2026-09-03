@@ -16,9 +16,9 @@ import logging
 from typing import Optional
 
 import numpy as np
-from wyoming.audio import AudioChunk
 
 from easy_audio_interfaces.network.network_interfaces import TCPServer
+from easy_audio_interfaces.types.audio import AudioChunk
 
 logger = logging.getLogger(__name__)
 

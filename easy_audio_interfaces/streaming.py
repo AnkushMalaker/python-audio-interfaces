@@ -2,7 +2,7 @@ import wave
 from pathlib import Path
 from typing import BinaryIO, Generator, Optional
 
-from wyoming.audio import AudioChunk
+from easy_audio_interfaces.types.audio import AudioChunk
 
 
 class WaveFileStreamer:
@@ -65,6 +65,8 @@ class WaveFileStreamer:
 
     def read_chunk_by_samples(self, num_samples: int) -> AudioChunk:
         """Read a chunk of the specified number of samples."""
+        if num_samples <= 0:
+            raise ValueError("num_samples must be greater than zero")
         if self._wav_file is None or self._frames_remaining is None:
             raise RuntimeError("WaveFileStreamer not opened")
 
@@ -84,10 +86,16 @@ class WaveFileStreamer:
 
     def read_chunk_by_duration(self, duration_ms: int) -> AudioChunk:
         """Read a chunk of the specified duration in milliseconds."""
+        if duration_ms <= 0:
+            raise ValueError("duration_ms must be greater than zero")
         if self._rate is None:
             raise RuntimeError("WaveFileStreamer not opened")
         samples_per_ms = self._rate / 1000
         num_samples = int(duration_ms * samples_per_ms)
+        if num_samples <= 0:
+            raise ValueError(
+                f"duration_ms={duration_ms} is too small to contain one sample at {self._rate} Hz"
+            )
         return self.read_chunk_by_samples(num_samples)
 
     def iter_chunks_by_samples(self, num_samples: int) -> Generator[AudioChunk, None, None]:

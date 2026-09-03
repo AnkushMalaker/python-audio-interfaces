@@ -12,7 +12,7 @@ async def serve():
     output_speaker = OutputSpeakerStream()
     async with server as server, output_speaker as output_speaker:
         async for chunk in server:
-            output_speaker.write(chunk)
+            await output_speaker.write(chunk)
 
 
 if __name__ == "__main__":

@@ -4,7 +4,8 @@ import struct
 from typing import AsyncGenerator
 
 import numpy as np
-from wyoming.audio import AudioChunk
+
+from easy_audio_interfaces.types.audio import AudioChunk
 
 
 def create_sine_wave_audio_chunk(

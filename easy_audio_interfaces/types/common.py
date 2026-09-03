@@ -1,8 +1,10 @@
 from pathlib import Path
 from typing import AsyncIterable, Union
 
-from wyoming.audio import AudioChunk
+from .audio import AudioChunk
 
 AudioStream = AsyncIterable[AudioChunk]
 
 PathLike = Union[str, Path]
+
+__all__ = ["AudioStream", "PathLike"]
